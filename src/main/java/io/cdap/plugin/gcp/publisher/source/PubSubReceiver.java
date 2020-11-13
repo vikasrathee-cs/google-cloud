@@ -20,12 +20,18 @@ import org.apache.spark.streaming.receiver.Receiver;
 import org.apache.spark.streaming.scheduler.RateController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.Option;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.List;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 
+/**
+ * Spark Receiver for Pub/Sub Messages.
+ *
+ * If backpressure is enabled, the message ingestion rate for this receiver will be managed by Spark.
+ */
 public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
   private static final Logger LOG = LoggerFactory.getLogger(PubSubReceiver.class);
@@ -34,17 +40,20 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   protected String project;
   protected String topic;
   protected String subscription;
+  protected boolean autoAcknowledge;
   protected ServiceAccountCredentials credentials;
-  protected Option<RateController> rateController;
+  protected RateController rateController;
 
-  public PubSubReceiver(String project, String topic, String subscription, ServiceAccountCredentials credentials,
-                        StorageLevel storageLevel, Option<RateController> rateController) {
-    this(project, topic, subscription, credentials, storageLevel, rateController,
+  public PubSubReceiver(String project, @Nullable String topic, String subscription,
+                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
+                        @Nullable RateController rateController) {
+    this(project, topic, subscription, credentials, autoAcknowledge, storageLevel, rateController,
          BackoffConfigBuilder.getInstance().build());
   }
 
-  public PubSubReceiver(String project, String topic, String subscription, ServiceAccountCredentials credentials,
-                        StorageLevel storageLevel, Option<RateController> rateController, BackoffConfig backoffConfig) {
+  public PubSubReceiver(String project, @Nullable String topic, String subscription,
+                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
+                        @Nullable RateController rateController, BackoffConfig backoffConfig) {
     super(storageLevel);
 
     this.backoffConfig = backoffConfig;
@@ -52,18 +61,21 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     this.topic = topic;
     this.subscription = subscription;
     this.credentials = credentials;
+    this.autoAcknowledge = autoAcknowledge;
     this.rateController = rateController;
   }
 
   @Override
   public void onStart() {
-    createSubscription();
+    if (topic != null) {
+      createSubscription();
+    }
     new Thread(this::receive).start();
   }
 
   @Override
   public void onStop() {
-    //no-op
+    LOG.info("Receiver received STOP signal");
   }
 
   /**
@@ -81,8 +93,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
       try (SubscriptionAdminClient subscriptionAdminClient = SubscriptionAdminClient.create()) {
 
-        ProjectTopicName topicName = ProjectTopicName.of(this.project, this.topic);
-        ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(this.project, this.subscription);
+        ProjectTopicName topicName = ProjectTopicName.of(project, topic);
+        ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(project, subscription);
         int ackDeadline = 10; //10 seconds before resending the message.
         subscriptionAdminClient.createSubscription(
           subscriptionName, topicName, PushConfig.getDefaultInstance(), ackDeadline);
@@ -114,7 +126,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
     }
 
-    if (isStopped()) return;
+    if (isStopped()) {
+      return;
+    }
 
     throw new RuntimeException("Failed to create subscription after 5 attempts.");
   }
@@ -128,12 +142,16 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   public void receive() {
     SubscriberStubSettings subscriberStubSettings = getSubscriberStubSettings();
 
+    LOG.info("Receiver Started execution");
+
     try (SubscriberStub subscriber = GrpcSubscriberStub.create(subscriberStubSettings)) {
-      String subscriptionName = ProjectSubscriptionName.format(this.project, this.subscription);
+      String subscriptionName = ProjectSubscriptionName.format(project, subscription);
       fetchMessagesWithRetry(subscriber, subscriptionName);
     } catch (IOException ioe) {
       throw new RuntimeException("Failed to fetch new messages.", ioe);
     }
+
+    LOG.info("Receiver completed execution");
   }
 
   /**
@@ -159,6 +177,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         }
       }
     }
+
+    LOG.info("Receiver is stopped");
   }
 
   /**
@@ -170,8 +190,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
    * @throws ApiException when the Pull request or ACK request fail.
    */
   protected void fetchAndAck(SubscriberStub subscriber, String subscriptionName) {
-    int maxMessages = this.rateController.isDefined() ?
-      this.rateController.map(RateController::getLatestRate).get().intValue() : 1000;
+    int maxMessages = supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
+      (int) supervisor().getCurrentRateLimit() : 1000;
+    LOG.info("Message rate is " + maxMessages);
 
     PullRequest pullRequest =
       PullRequest.newBuilder()
@@ -183,15 +204,28 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     List<ReceivedMessage> receivedMessages = pullResponse.getReceivedMessagesList();
     List<String> ackIds = receivedMessages.stream().map(ReceivedMessage::getAckId).collect(Collectors.toList());
 
+    //If there are no messages to process, continue.
+    if (receivedMessages.size() == 0) {
+      return;
+    }
+
+    //Exit if the receiver is stopped.
+    if (isStopped()) {
+      LOG.info("Receiver stopped before store and ack.");
+      return;
+    }
+
     store(receivedMessages.iterator());
 
-    // Acknowledge received messages.
-    AcknowledgeRequest acknowledgeRequest =
-      AcknowledgeRequest.newBuilder()
-        .setSubscription(subscriptionName)
-        .addAllAckIds(ackIds)
-        .build();
-    subscriber.acknowledgeCallable().call(acknowledgeRequest);
+    if (autoAcknowledge) {
+      // Acknowledge received messages.
+      AcknowledgeRequest acknowledgeRequest =
+        AcknowledgeRequest.newBuilder()
+          .setSubscription(subscriptionName)
+          .addAllAckIds(ackIds)
+          .build();
+      subscriber.acknowledgeCallable().call(acknowledgeRequest);
+    }
   }
 
   /**
@@ -222,7 +256,10 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     return backoff;
   }
 
-  public static class BackoffConfig {
+  /**
+   * Class used to configure exponential backoff for Pub/Sub API requests.
+   */
+  public static class BackoffConfig implements Serializable {
     final int initialBackoffMs;
     final int maximumBackoffMs;
     final double backoffFactor;
@@ -246,12 +283,15 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     }
   }
 
-  public static class BackoffConfigBuilder {
+  /**
+   * Builder class for BackoffConfig
+   */
+  public static class BackoffConfigBuilder implements Serializable {
     public int initialBackoffMs = 100;
-    public int maximumBackoffMs = 100;
+    public int maximumBackoffMs = 10000;
     public double backoffFactor = 2.0;
 
-    public BackoffConfigBuilder() {
+    protected BackoffConfigBuilder() {
     }
 
     public static BackoffConfigBuilder getInstance() {
@@ -259,7 +299,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     }
 
     public BackoffConfig build() {
-      if (maximumBackoffMs > initialBackoffMs) {
+      if (initialBackoffMs > maximumBackoffMs) {
         throw new IllegalArgumentException("Maximum backoff cannot be smaller than Initial backoff");
       }
 
