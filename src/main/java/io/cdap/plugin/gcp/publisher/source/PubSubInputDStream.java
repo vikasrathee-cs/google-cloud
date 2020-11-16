@@ -53,8 +53,6 @@ public class PubSubInputDStream extends ReceiverInputDStream<ReceivedMessage> {
                               this.subscription,
                               this.credentials,
                               this.autoAcknowledge,
-                              this.storageLevel,
-                              null);
-//                              this.rateController().getOrElse(null));
+                              this.storageLevel);
   }
 }

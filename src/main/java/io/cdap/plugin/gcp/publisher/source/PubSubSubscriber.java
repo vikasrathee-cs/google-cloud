@@ -37,10 +37,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.reflect.ClassTag;
 
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -66,19 +62,6 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
   public void configurePipeline(PipelineConfigurer pipelineConfigurer) {
     super.configurePipeline(pipelineConfigurer);
     pipelineConfigurer.getStageConfigurer().setOutputSchema(this.schema);
-
-    Map<String, String> properties = new HashMap<>();
-    properties.put("spark.streaming.backpressure.initialRate", "1500");
-    properties.put("spark.streaming.backpressure.pid.proportional", "2.0");
-    properties.put("spark.streaming.backpressure.pid.integral", "0.5");
-    properties.put("spark.streaming.backpressure.pid.derived", "0.2");
-    properties.put("spark.streaming.backpressure.pid.minRate", "250");
-    properties.put("spark.streaming.receiver.maxRate", "10000");
-    properties.put("spark.streaming.receiver.writeAheadLog.enable", "true");
-    properties.put("spark.streaming.driver.writeAheadLog.closeFileAfterWrite", "true");
-    properties.put("spark.streaming.receiver.writeAheadLog.closeFileAfterWrite", "true");
-
-    pipelineConfigurer.setPipelineProperties(properties);
   }
 
   @Override
@@ -98,12 +81,6 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
   @Override
   public JavaDStream<T> getStream(StreamingContext streamingContext) throws Exception {
     SparkConf sparkConf = streamingContext.getSparkStreamingContext().ssc().conf();
-    sparkConf.set("spark.streaming.backpressure.initialRate", "1500");
-    sparkConf.set("spark.streaming.backpressure.pid.proportional", "2.0");
-    sparkConf.set("spark.streaming.backpressure.pid.integral", "0.5");
-    sparkConf.set("spark.streaming.backpressure.pid.derived", "0.2");
-    sparkConf.set("spark.streaming.backpressure.pid.minRate", "250");
-    sparkConf.set("spark.streaming.receiver.maxRate", "10000");
     sparkConf.set("spark.streaming.receiver.writeAheadLog.enable", "true");
     sparkConf.set("spark.streaming.driver.writeAheadLog.closeFileAfterWrite", "true");
     sparkConf.set("spark.streaming.receiver.writeAheadLog.closeFileAfterWrite", "true");
@@ -117,14 +94,14 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
     }
 
     JavaReceiverInputDStream<ReceivedMessage> stream =
-      getStreamInstance(streamingContext, credentials, autoAcknowledge);
+      getInputDStream(streamingContext, credentials, autoAcknowledge);
 
     return (JavaDStream<T>) stream.map(pubSubMessage -> mappingFunction.apply(pubSubMessage));
   }
 
-  protected JavaReceiverInputDStream<ReceivedMessage> getStreamInstance(StreamingContext streamingContext,
-                                                                        ServiceAccountCredentials credentials,
-                                                                        boolean autoAcknowledge) {
+  protected JavaReceiverInputDStream<ReceivedMessage> getInputDStream(StreamingContext streamingContext,
+                                                                      ServiceAccountCredentials credentials,
+                                                                      boolean autoAcknowledge) {
     ReceiverInputDStream<ReceivedMessage> stream =
       new PubSubInputDStream(streamingContext.getSparkStreamingContext().ssc(), config.getProject(),
                              config.getTopic(), config.getSubscription(), credentials, StorageLevel.MEMORY_ONLY(),
@@ -135,7 +112,7 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
   @Override
   public int getRequiredExecutors() {
-    return 3;
+    return 1;
   }
 
   /**
@@ -155,6 +132,12 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
     @Macro
     @Nullable
     private String topic;
+
+    @Description("Set the number of receivers to run in parallel. There need to be enough workers in the " +
+      "cluster to run all receivers. By default, only 1 receiver is running per Pub/Sub Source.")
+    @Macro
+    @Nullable
+    private Integer numberOfReceivers;
 
     public void validate(FailureCollector collector) {
       super.validate(collector);
@@ -190,6 +173,10 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
     public String getTopic() {
       return topic;
+    }
+
+    public int getNumberOfReceivers() {
+      return numberOfReceivers;
     }
   }
 }

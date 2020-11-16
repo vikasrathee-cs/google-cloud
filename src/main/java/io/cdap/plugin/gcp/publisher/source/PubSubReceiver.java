@@ -17,7 +17,6 @@ import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.ReceivedMessage;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.receiver.Receiver;
-import org.apache.spark.streaming.scheduler.RateController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +28,7 @@ import javax.annotation.Nullable;
 
 /**
  * Spark Receiver for Pub/Sub Messages.
- *
+ * <p>
  * If backpressure is enabled, the message ingestion rate for this receiver will be managed by Spark.
  */
 public class PubSubReceiver extends Receiver<ReceivedMessage> {
@@ -42,18 +41,16 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   protected String subscription;
   protected boolean autoAcknowledge;
   protected ServiceAccountCredentials credentials;
-  protected RateController rateController;
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
-                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
-                        @Nullable RateController rateController) {
-    this(project, topic, subscription, credentials, autoAcknowledge, storageLevel, rateController,
+                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
+    this(project, topic, subscription, credentials, autoAcknowledge, storageLevel,
          BackoffConfigBuilder.getInstance().build());
   }
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
                         ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
-                        @Nullable RateController rateController, BackoffConfig backoffConfig) {
+                        BackoffConfig backoffConfig) {
     super(storageLevel);
 
     this.backoffConfig = backoffConfig;
@@ -62,7 +59,6 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     this.subscription = subscription;
     this.credentials = credentials;
     this.autoAcknowledge = autoAcknowledge;
-    this.rateController = rateController;
   }
 
   @Override
@@ -190,13 +186,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
    * @throws ApiException when the Pull request or ACK request fail.
    */
   protected void fetchAndAck(SubscriberStub subscriber, String subscriptionName) {
-    int maxMessages = supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
-      (int) supervisor().getCurrentRateLimit() : 1000;
-    LOG.info("Message rate is " + maxMessages);
-
     PullRequest pullRequest =
       PullRequest.newBuilder()
-        .setMaxMessages(maxMessages)
+        .setMaxMessages(getMessageRate())
         .setSubscription(subscriptionName)
         .build();
     PullResponse pullResponse = subscriber.pullCallable().call(pullRequest);
@@ -254,6 +246,18 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     backoff = Math.min((int) (backoff * backoffConfig.getBackoffFactor()), backoffConfig.getMaximumBackoffMs());
 
     return backoff;
+  }
+
+  /**
+   * Get the rate at which this receiver should pull messages.
+   *
+   * The default rate is 1000 (matching Apache Bahir) if the receiver has not been able to calculate a rate.
+   *
+   * @return The current rate at which this receiver should fetch messages.
+   */
+  protected int getMessageRate() {
+    return supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
+      (int) supervisor().getCurrentRateLimit() : 1000;
   }
 
   /**

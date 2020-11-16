@@ -4,7 +4,7 @@ import java.io.Serializable;
 import java.util.function.Function;
 
 /**
- * Interface used to make a Java function (lambda) serializable.
+ * Interface used to make a Java.util.function.Function serializable.
  * @param <T> Function input class
  * @param <U> Function output class
  */
