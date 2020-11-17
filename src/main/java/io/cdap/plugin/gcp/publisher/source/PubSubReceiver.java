@@ -71,7 +71,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
   @Override
   public void onStop() {
-    LOG.info("Receiver received STOP signal");
+    //no-op
   }
 
   /**
@@ -87,7 +87,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
     while (!isStopped() && attempts-- > 0) {
 
-      try (SubscriptionAdminClient subscriptionAdminClient = SubscriptionAdminClient.create()) {
+      try (SubscriptionAdminClient subscriptionAdminClient = getSubscriptionAdminClient()) {
 
         ProjectTopicName topicName = ProjectTopicName.of(project, topic);
         ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(project, subscription);
@@ -97,7 +97,6 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         return;
 
       } catch (ApiException ae) {
-
         //If the subscription already exists, ignore the error.
         if (ae.getStatusCode().getCode().equals(StatusCode.Code.ALREADY_EXISTS)) {
           return;
@@ -138,16 +137,20 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   public void receive() {
     SubscriberStubSettings subscriberStubSettings = getSubscriberStubSettings();
 
-    LOG.info("Receiver Started execution");
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Receiver Started execution");
+    }
 
-    try (SubscriberStub subscriber = GrpcSubscriberStub.create(subscriberStubSettings)) {
+    try (SubscriberStub subscriber = getSubscriberStub(subscriberStubSettings)) {
       String subscriptionName = ProjectSubscriptionName.format(project, subscription);
       fetchMessagesWithRetry(subscriber, subscriptionName);
     } catch (IOException ioe) {
       throw new RuntimeException("Failed to fetch new messages.", ioe);
     }
 
-    LOG.info("Receiver completed execution");
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Receiver completed execution");
+    }
   }
 
   /**
@@ -173,8 +176,6 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         }
       }
     }
-
-    LOG.info("Receiver is stopped");
   }
 
   /**
@@ -203,7 +204,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
     //Exit if the receiver is stopped.
     if (isStopped()) {
-      LOG.info("Receiver stopped before store and ack.");
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("Receiver stopped before store and ack.");
+      }
       return;
     }
 
@@ -235,6 +238,33 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     }
   }
 
+  /**
+   * Get Subscription Admin Client instance
+   *
+   * @return Subscription Admin Client instance.
+   * @throws IOException
+   */
+  protected SubscriptionAdminClient getSubscriptionAdminClient() throws IOException {
+    return SubscriptionAdminClient.create();
+  }
+
+  /**
+   * Get Subscruiber Stub instance
+   *
+   * @param subscriberStubSettings
+   * @return
+   * @throws IOException
+   */
+  protected SubscriberStub getSubscriberStub(SubscriberStubSettings subscriberStubSettings) throws IOException {
+    return GrpcSubscriberStub.create(subscriberStubSettings);
+  }
+
+  /**
+   * Sleep for a given number of milliseconds, calculate new backoff time and return.
+   *
+   * @param backoff the time in milliseconds to delay execution.
+   * @return the new backoff delay in milliseconds
+   */
   protected int sleepAndIncreaseBackoff(int backoff) {
     try {
       if (!isStopped()) {
@@ -250,14 +280,20 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
 
   /**
    * Get the rate at which this receiver should pull messages.
-   *
+   * <p>
    * The default rate is 1000 (matching Apache Bahir) if the receiver has not been able to calculate a rate.
    *
    * @return The current rate at which this receiver should fetch messages.
    */
   protected int getMessageRate() {
-    return supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
+    int messageRate = supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
       (int) supervisor().getCurrentRateLimit() : 1000;
+
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Receiver rate is: " + messageRate);
+    }
+
+    return messageRate;
   }
 
   /**
