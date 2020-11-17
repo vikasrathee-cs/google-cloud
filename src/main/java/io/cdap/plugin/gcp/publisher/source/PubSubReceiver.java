@@ -249,11 +249,11 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   }
 
   /**
-   * Get Subscruiber Stub instance
+   * Get Subscriber Stub instance
    *
-   * @param subscriberStubSettings
-   * @return
-   * @throws IOException
+   * @param subscriberStubSettings The settings for this Subscriber Stub client.
+   * @return a new Subscriber Stub Instance
+   * @throws IOException the exception thrown by the Pub/Sub library if the Subscriber Stub Settings are invalid.
    */
   protected SubscriberStub getSubscriberStub(SubscriberStubSettings subscriberStubSettings) throws IOException {
     return GrpcSubscriberStub.create(subscriberStubSettings);

@@ -7,6 +7,7 @@ import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.ProjectTopicName;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.Subscription;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
@@ -28,7 +29,7 @@ import static org.mockito.Mockito.when;
 
 @RunWith(PowerMockRunner.class)
 @PrepareForTest(SubscriptionAdminClient.class)
-public class PubSubReceiverTest {
+public class PubSubReceiverSubscriptionTest {
 
   @Mock
   StatusCode statusCode;
@@ -39,15 +40,23 @@ public class PubSubReceiverTest {
   @Mock
   SubscriptionAdminClient subscriptionAdminClient;
 
-  @Test
-  public void testCreateSubscriptionSuccessCase() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
+  @Mock
+  PubSubReceiver receiver;
+
+  @Before
+  public void setUp() {
     receiver.project = "project";
     receiver.topic = "topic";
     receiver.subscription = "subscription";
     receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
 
     when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
+    when(receiver.backoffConfig.getBackoffFactor()).thenReturn(2.0);
+    when(receiver.backoffConfig.getMaximumBackoffMs()).thenReturn(10000);
+  }
+
+  @Test
+  public void testCreateSubscriptionSuccessCase() throws IOException {
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
 
@@ -62,13 +71,6 @@ public class PubSubReceiverTest {
 
   @Test
   public void testCreateSubscriptionAlreadyExistsCase() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
     when(apiException.getStatusCode()).thenReturn(statusCode);
@@ -94,13 +96,6 @@ public class PubSubReceiverTest {
 
   @Test(expected = IllegalArgumentException.class)
   public void testCreateSubscriptionTopicDoesNotExist() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
     when(apiException.getStatusCode()).thenReturn(statusCode);
@@ -118,13 +113,6 @@ public class PubSubReceiverTest {
 
   @Test(expected = ApiException.class)
   public void testCreateSubscriptionAnyOtherAPIException() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
     // We need to throw a proper instance for ApiException and not a mock in this case.
@@ -143,13 +131,6 @@ public class PubSubReceiverTest {
 
   @Test(expected = RuntimeException.class)
   public void testCreateSubscriptionWrapIOExceptionInRuntimeException() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doThrow(new IOException()).when(receiver).getSubscriptionAdminClient();
 
@@ -158,13 +139,6 @@ public class PubSubReceiverTest {
 
   @Test
   public void testSubscriptionRetryLogic() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
     when(apiException.getStatusCode()).thenReturn(statusCode);
@@ -192,13 +166,6 @@ public class PubSubReceiverTest {
 
   @Test(expected = RuntimeException.class)
   public void testSubscriptionRetryLogicExceedsAttempts() throws IOException {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     doCallRealMethod().when(receiver).createSubscription();
     doReturn(subscriptionAdminClient).when(receiver).getSubscriptionAdminClient();
     when(apiException.getStatusCode()).thenReturn(statusCode);
@@ -227,13 +194,6 @@ public class PubSubReceiverTest {
 
   @Test
   public void testSubscriptionIsStopped() {
-    PubSubReceiver receiver = mock(PubSubReceiver.class);
-    receiver.project = "project";
-    receiver.topic = "topic";
-    receiver.subscription = "subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
-
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
     when(receiver.isStopped()).thenReturn(true);
 
     receiver.createSubscription();
