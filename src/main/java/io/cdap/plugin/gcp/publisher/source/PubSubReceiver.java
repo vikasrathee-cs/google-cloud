@@ -100,6 +100,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     int backoff = backoffConfig.getInitialBackoffMs();
     int attempts = 5;
 
+    ApiException lastApiException = null;
+
     while (!isStopped() && attempts-- > 0) {
 
       try (SubscriptionAdminClient subscriptionAdminClient = getSubscriptionAdminClient()) {
@@ -112,6 +114,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         return;
 
       } catch (ApiException ae) {
+
+        lastApiException = ae;
+
         //If the subscription already exists, ignore the error.
         if (ae.getStatusCode().getCode().equals(StatusCode.Code.ALREADY_EXISTS)) {
           return;
@@ -120,7 +125,10 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         //This error is thrown is the Topic Name is not valid.
         //Throw an Illegal Argument Exception so the pipeline fails.
         if (ae.getStatusCode().getCode().equals(StatusCode.Code.NOT_FOUND)) {
-          throw new IllegalArgumentException("Failed to create subscription. Topic Name is invalid.", ae);
+          String message = String.format("Failed to create subscription. Topic '%s' was not found in project '%s'.",
+                                         topic,
+                                         project);
+          throw new IllegalArgumentException(message, ae);
         }
 
         //Retry if the exception is retriable.
@@ -140,7 +148,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
       return;
     }
 
-    throw new RuntimeException("Failed to create subscription after 5 attempts.");
+    throw new RuntimeException("Failed to create subscription after 5 attempts.", lastApiException);
   }
 
   /**
@@ -158,7 +166,9 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
       String subscriptionName = ProjectSubscriptionName.format(project, subscription);
       fetchMessagesUntilStopped(subscriber, subscriptionName);
     } catch (IOException | ApiException e) {
-      throw new RuntimeException("Failed to fetch new messages.", e);
+      String message =
+        String.format("Failed to fetch new messages using subscription '%s' for project '%s'.", subscription, project);
+      throw new RuntimeException(message, e);
     }
 
     LOG.debug("Receiver completed execution");
@@ -245,7 +255,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         .setCredentialsProvider(FixedCredentialsProvider.create(credentials))
         .build();
     } catch (IOException ioe) {
-      throw new RuntimeException("Failed to fetch messages.", ioe);
+      throw new RuntimeException("Failed to fetch messages. " +
+                                   "Unable to create subscriber settings using the supplied credentials.", ioe);
     }
   }
 
