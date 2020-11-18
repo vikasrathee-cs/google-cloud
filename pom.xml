@@ -446,6 +446,7 @@
         </exclusion>
       </exclusions>
     </dependency>
+    <!-- Start: Testing dependencies -->
     <dependency>
       <groupId>org.powermock</groupId>
       <artifactId>powermock-module-junit4</artifactId>
@@ -458,6 +459,7 @@
       <version>${powermock.version}</version>
       <scope>test</scope>
     </dependency>
+    <!-- End: Testing dependencies -->
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-streaming_2.11</artifactId>
@@ -521,12 +523,6 @@
     </dependency>
     <!-- End: dependency for Google PubSub Streaming Source -->
 
-    <dependency>
-      <groupId>org.mockito</groupId>
-      <artifactId>mockito-core</artifactId>
-      <version>2.24.0</version>
-      <scope>test</scope>
-    </dependency>
     <!-- Dependencies are required after updating bigquery.connector version from 0.13.1-hadoop2 to hadoop2-0.13.17 -->
     <dependency>
       <groupId>commons-codec</groupId>

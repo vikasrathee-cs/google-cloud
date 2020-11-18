@@ -19,6 +19,7 @@ import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.collection.mutable.ArrayBuffer;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -144,8 +145,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     try (SubscriberStub subscriber = getSubscriberStub(subscriberStubSettings)) {
       String subscriptionName = ProjectSubscriptionName.format(project, subscription);
       fetchMessagesWithRetry(subscriber, subscriptionName);
-    } catch (IOException ioe) {
-      throw new RuntimeException("Failed to fetch new messages.", ioe);
+    } catch (IOException | ApiException e) {
+      throw new RuntimeException("Failed to fetch new messages.", e);
     }
 
     if (LOG.isTraceEnabled()) {
@@ -273,9 +274,18 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     } catch (InterruptedException e) {
       LOG.warn("Interrupted Exception in PubSubReceiver.");
     }
-    backoff = Math.min((int) (backoff * backoffConfig.getBackoffFactor()), backoffConfig.getMaximumBackoffMs());
 
-    return backoff;
+    return calculateUpdatedBackoff(backoff);
+  }
+
+  /**
+   * Calculate the updated backoff period baded on the Backoff configuration parameters.
+   *
+   * @param backoff the previous backoff period
+   * @return the updated backoff period for the next cycle.
+   */
+  protected int calculateUpdatedBackoff(int backoff) {
+    return Math.min((int) (backoff * backoffConfig.getBackoffFactor()), backoffConfig.getMaximumBackoffMs());
   }
 
   /**
