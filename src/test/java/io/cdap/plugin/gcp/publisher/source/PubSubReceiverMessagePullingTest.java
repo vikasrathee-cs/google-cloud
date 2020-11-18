@@ -103,7 +103,7 @@ public class PubSubReceiverMessagePullingTest {
     receiver.receive();
 
     verify(receiver, times(1))
-      .fetchMessagesWithRetry(subscriberStub, "projects/my-project/subscriptions/my-subscription");
+      .fetchMessagesUntilStopped(subscriberStub, "projects/my-project/subscriptions/my-subscription");
   }
 
   @Test(expected = RuntimeException.class)
@@ -122,7 +122,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAckWithRetry() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesWithRetry(any(), anyString());
+    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
 
     //Stop after 3 iterations
     when(receiver.isStopped())
@@ -131,17 +131,17 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesWithRetry(subscriberStub, "some-sub");
+    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
 
-    verify(receiver, times(3)).fetchAndAck(eq(subscriberStub), eq("some-sub"));
+    verify(receiver, times(3)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
   }
 
   @Test
   public void testFetchAckWithRetryBackoff() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesWithRetry(any(), anyString());
+    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
     when(apiException.isRetryable()).thenReturn(true);
 
-    doThrow(apiException).when(receiver).fetchAndAck(any(), anyString());
+    doThrow(apiException).when(receiver).fetchAndStoreMessages(any(), anyString());
 
     when(receiver.sleepAndIncreaseBackoff(anyInt()))
       .thenReturn(200)
@@ -159,9 +159,9 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesWithRetry(subscriberStub, "some-sub");
+    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
 
-    verify(receiver, times(5)).fetchAndAck(eq(subscriberStub), eq("some-sub"));
+    verify(receiver, times(5)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
     verify(receiver, times(5)).sleepAndIncreaseBackoff(anyInt());
     verify(receiver).sleepAndIncreaseBackoff(100);
     verify(receiver).sleepAndIncreaseBackoff(200);
@@ -172,7 +172,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAckWithRetryBackoffRecovery() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesWithRetry(any(), anyString());
+    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
     when(apiException.isRetryable()).thenReturn(true);
 
     doAnswer(new Answer<Void>() {
@@ -188,7 +188,7 @@ public class PubSubReceiverMessagePullingTest {
 
         return null;
       }
-    }).when(receiver).fetchAndAck(any(), anyString());
+    }).when(receiver).fetchAndStoreMessages(any(), anyString());
 
     when(receiver.sleepAndIncreaseBackoff(anyInt()))
       .thenReturn(200)
@@ -209,9 +209,9 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesWithRetry(subscriberStub, "some-sub");
+    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
 
-    verify(receiver, times(7)).fetchAndAck(eq(subscriberStub), eq("some-sub"));
+    verify(receiver, times(7)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
     verify(receiver.backoffConfig, times(2)).getInitialBackoffMs();
     verify(receiver, times(6)).sleepAndIncreaseBackoff(anyInt());
     verify(receiver, times(2)).sleepAndIncreaseBackoff(100);
@@ -221,21 +221,21 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test(expected = ApiException.class)
   public void testFetchAckThrowsNonRetryableApiException() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesWithRetry(any(), anyString());
+    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
     when(apiException.isRetryable()).thenReturn(false);
 
     when(statusCode.getCode()).thenReturn(StatusCode.Code.INVALID_ARGUMENT);
     ApiException apiException = new ApiException(new RuntimeException(""), statusCode, false);
-    doThrow(apiException).when(receiver).fetchAndAck(any(), anyString());
+    doThrow(apiException).when(receiver).fetchAndStoreMessages(any(), anyString());
 
     when(receiver.isStopped()).thenReturn(false);
 
-    receiver.fetchMessagesWithRetry(subscriberStub, "some-sub");
+    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
   }
 
   @Test
   public void testFetchAndAckWithAutoAcknowledge() throws IOException {
-    doCallRealMethod().when(receiver).fetchAndAck(any(), anyString());
+    doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
     receiver.autoAcknowledge = true;
 
@@ -245,7 +245,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndAck(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(1)).store(any(Iterator.class));
@@ -261,7 +261,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAndAckWithoutAutoAcknowledge() throws IOException {
-    doCallRealMethod().when(receiver).fetchAndAck(any(), anyString());
+    doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
     receiver.autoAcknowledge = false;
 
@@ -271,7 +271,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndAck(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(1)).store(any(Iterator.class));
@@ -283,7 +283,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAndAckReturnsNoNewMessages() throws IOException {
-    doCallRealMethod().when(receiver).fetchAndAck(any(), anyString());
+    doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
     receiver.autoAcknowledge = false;
 
@@ -293,7 +293,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndAck(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(0)).store(any(Iterator.class));

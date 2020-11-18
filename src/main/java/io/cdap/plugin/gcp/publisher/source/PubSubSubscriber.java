@@ -46,7 +46,9 @@ import javax.annotation.Nullable;
  * @param <T> The type that the ReceivedMessage will be mapped to by the mapping function.
  */
 public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
+
   protected static final Logger LOG = LoggerFactory.getLogger(PubSubSubscriber.class);
+
   protected SubscriberConfig config;
   protected Schema schema;
   protected SerializableFunction<ReceivedMessage, T> mappingFunction;

@@ -1,3 +1,18 @@
+/*
+ * Copyright © 2018 Cask Data, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
 package io.cdap.plugin.gcp.publisher.source;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
@@ -19,7 +34,6 @@ import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.collection.mutable.ArrayBuffer;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -138,20 +152,16 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   public void receive() {
     SubscriberStubSettings subscriberStubSettings = getSubscriberStubSettings();
 
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("Receiver Started execution");
-    }
+    LOG.debug("Receiver Started execution");
 
     try (SubscriberStub subscriber = getSubscriberStub(subscriberStubSettings)) {
       String subscriptionName = ProjectSubscriptionName.format(project, subscription);
-      fetchMessagesWithRetry(subscriber, subscriptionName);
+      fetchMessagesUntilStopped(subscriber, subscriptionName);
     } catch (IOException | ApiException e) {
       throw new RuntimeException("Failed to fetch new messages.", e);
     }
 
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("Receiver completed execution");
-    }
+    LOG.debug("Receiver completed execution");
   }
 
   /**
@@ -162,12 +172,12 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
    * @param subscriptionName The name of the subscription to use to pull data.
    * @throws ApiException when the Pub/Sub API throws a non-retryable exception.
    */
-  protected void fetchMessagesWithRetry(SubscriberStub subscriber, String subscriptionName) {
+  protected void fetchMessagesUntilStopped(SubscriberStub subscriber, String subscriptionName) {
     int backoff = backoffConfig.getInitialBackoffMs();
 
     while (!isStopped()) {
       try {
-        fetchAndAck(subscriber, subscriptionName);
+        fetchAndStoreMessages(subscriber, subscriptionName);
         backoff = backoffConfig.getInitialBackoffMs();
       } catch (ApiException ae) {
         if (ae.isRetryable()) {
@@ -187,7 +197,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
    * @param subscriptionName The name of the subscription to use to pull data.
    * @throws ApiException when the Pull request or ACK request fail.
    */
-  protected void fetchAndAck(SubscriberStub subscriber, String subscriptionName) {
+  protected void fetchAndStoreMessages(SubscriberStub subscriber, String subscriptionName) {
     PullRequest pullRequest =
       PullRequest.newBuilder()
         .setMaxMessages(getMessageRate())
@@ -196,24 +206,24 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     PullResponse pullResponse = subscriber.pullCallable().call(pullRequest);
 
     List<ReceivedMessage> receivedMessages = pullResponse.getReceivedMessagesList();
-    List<String> ackIds = receivedMessages.stream().map(ReceivedMessage::getAckId).collect(Collectors.toList());
 
     //If there are no messages to process, continue.
-    if (receivedMessages.size() == 0) {
+    if (receivedMessages.isEmpty()) {
       return;
     }
 
-    //Exit if the receiver is stopped.
+    //Exit if the receiver is stopped before storing.
     if (isStopped()) {
-      if (LOG.isTraceEnabled()) {
-        LOG.trace("Receiver stopped before store and ack.");
-      }
+      LOG.debug("Receiver stopped before store and ack.");
       return;
     }
 
     store(receivedMessages.iterator());
 
     if (autoAcknowledge) {
+      List<String> ackIds =
+        receivedMessages.stream().map(ReceivedMessage::getAckId).collect(Collectors.toList());
+
       // Acknowledge received messages.
       AcknowledgeRequest acknowledgeRequest =
         AcknowledgeRequest.newBuilder()
@@ -299,9 +309,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
     int messageRate = supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
       (int) supervisor().getCurrentRateLimit() : 1000;
 
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("Receiver rate is: " + messageRate);
-    }
+    LOG.trace("Receiver rate is: {}", messageRate);
 
     return messageRate;
   }
