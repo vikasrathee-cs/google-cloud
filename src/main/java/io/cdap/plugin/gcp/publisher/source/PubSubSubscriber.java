@@ -1,5 +1,5 @@
 /*
- * Copyright © 2018 Cask Data, Inc.
+ * Copyright © 2020 Cask Data, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,7 +16,6 @@
 package io.cdap.plugin.gcp.publisher.source;
 
 import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.pubsub.v1.ReceivedMessage;
 import io.cdap.cdap.api.annotation.Description;
 import io.cdap.cdap.api.annotation.Macro;
 import io.cdap.cdap.api.data.schema.Schema;
@@ -43,7 +42,7 @@ import javax.annotation.Nullable;
 /**
  * Base implementation of a Realtime source plugin to read from Google PubSub.
  *
- * @param <T> The type that the ReceivedMessage will be mapped to by the mapping function.
+ * @param <T> The type that the PubSubMessage will be mapped to by the mapping function.
  */
 public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
@@ -51,10 +50,10 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
   protected SubscriberConfig config;
   protected Schema schema;
-  protected SerializableFunction<ReceivedMessage, T> mappingFunction;
+  protected SerializableFunction<PubSubMessage, T> mappingFunction;
 
   public PubSubSubscriber(SubscriberConfig conf, Schema schema,
-                          SerializableFunction<ReceivedMessage, T> mappingFunction) {
+                          SerializableFunction<PubSubMessage, T> mappingFunction) {
     this.config = conf;
     this.schema = schema;
     this.mappingFunction = mappingFunction;
@@ -95,20 +94,20 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
       autoAcknowledge = false;
     }
 
-    JavaReceiverInputDStream<ReceivedMessage> stream =
+    JavaReceiverInputDStream<PubSubMessage> stream =
       getInputDStream(streamingContext, credentials, autoAcknowledge);
 
     return (JavaDStream<T>) stream.map(pubSubMessage -> mappingFunction.apply(pubSubMessage));
   }
 
-  protected JavaReceiverInputDStream<ReceivedMessage> getInputDStream(StreamingContext streamingContext,
+  protected JavaReceiverInputDStream<PubSubMessage> getInputDStream(StreamingContext streamingContext,
                                                                       ServiceAccountCredentials credentials,
                                                                       boolean autoAcknowledge) {
-    ReceiverInputDStream<ReceivedMessage> stream =
+    ReceiverInputDStream<PubSubMessage> stream =
       new PubSubInputDStream(streamingContext.getSparkStreamingContext().ssc(), config.getProject(),
                              config.getTopic(), config.getSubscription(), credentials, StorageLevel.MEMORY_ONLY(),
                              autoAcknowledge);
-    ClassTag<ReceivedMessage> tag = scala.reflect.ClassTag$.MODULE$.apply(ReceivedMessage.class);
+    ClassTag<PubSubMessage> tag = scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class);
     return new JavaReceiverInputDStream<>(stream, tag);
   }
 

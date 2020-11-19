@@ -617,8 +617,6 @@
               io.cdap.plugin.gcp.*;
               com.google.auth.oauth2.*;
               com.google.cloud.hadoop.*;
-              com.google.pubsub.v1.*;
-              com.google.protobuf.*;
               org.apache.spark.streaming.pubsub*;
               org.apache.hadoop.hbase.mapreduce.*;
               org.apache.hadoop.hbase.security.token.*;

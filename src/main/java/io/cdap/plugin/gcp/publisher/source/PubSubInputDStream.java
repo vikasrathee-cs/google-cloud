@@ -1,5 +1,5 @@
 /*
- * Copyright © 2018 Cask Data, Inc.
+ * Copyright © 2020 Cask Data, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -16,7 +16,6 @@
 package io.cdap.plugin.gcp.publisher.source;
 
 import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.pubsub.v1.ReceivedMessage;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.StreamingContext;
 import org.apache.spark.streaming.dstream.ReceiverInputDStream;
@@ -27,7 +26,7 @@ import javax.annotation.Nullable;
 /**
  * Input Stream used to subscribe to a Pub/Sub topic and pull messages.
  */
-public class PubSubInputDStream extends ReceiverInputDStream<ReceivedMessage> {
+public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
 
   protected String project;
   protected String topic;
@@ -50,7 +49,7 @@ public class PubSubInputDStream extends ReceiverInputDStream<ReceivedMessage> {
   PubSubInputDStream(StreamingContext streamingContext, String project, @Nullable String topic,
                      String subscription, ServiceAccountCredentials credentials, StorageLevel storageLevel,
                      boolean autoAcknowledge) {
-    super(streamingContext, scala.reflect.ClassTag$.MODULE$.apply(ReceivedMessage.class));
+    super(streamingContext, scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class));
     this.project = project;
     this.topic = topic;
     this.subscription = subscription;
@@ -62,7 +61,7 @@ public class PubSubInputDStream extends ReceiverInputDStream<ReceivedMessage> {
 
 
   @Override
-  public Receiver<ReceivedMessage> getReceiver() {
+  public Receiver<PubSubMessage> getReceiver() {
     return new PubSubReceiver(this.project,
                               this.topic,
                               this.subscription,

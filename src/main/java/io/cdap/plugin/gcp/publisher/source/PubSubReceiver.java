@@ -1,5 +1,5 @@
 /*
- * Copyright © 2018 Cask Data, Inc.
+ * Copyright © 2020 Cask Data, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -15,10 +15,15 @@
  */
 package io.cdap.plugin.gcp.publisher.source;
 
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.gax.core.FixedCredentialsProvider;
+import com.google.api.gax.httpjson.HttpJsonTransportChannel;
+import com.google.api.gax.httpjson.InstantiatingHttpJsonChannelProvider;
 import com.google.api.gax.rpc.ApiException;
+import com.google.api.gax.rpc.FixedTransportChannelProvider;
 import com.google.api.gax.rpc.StatusCode;
 import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.cloud.hadoop.util.RetryHttpInitializer;
 import com.google.cloud.pubsub.v1.SubscriptionAdminClient;
 import com.google.cloud.pubsub.v1.stub.GrpcSubscriberStub;
 import com.google.cloud.pubsub.v1.stub.SubscriberStub;
@@ -31,13 +36,16 @@ import com.google.pubsub.v1.PullResponse;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.ReceivedMessage;
 import org.apache.spark.storage.StorageLevel;
+import org.apache.spark.streaming.pubsub.ConnectionUtils;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.security.GeneralSecurityException;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -46,7 +54,7 @@ import javax.annotation.Nullable;
  * <p>
  * If backpressure is enabled, the message ingestion rate for this receiver will be managed by Spark.
  */
-public class PubSubReceiver extends Receiver<ReceivedMessage> {
+public class PubSubReceiver extends Receiver<PubSubMessage> {
 
   private static final Logger LOG = LoggerFactory.getLogger(PubSubReceiver.class);
 
@@ -56,6 +64,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   protected String subscription;
   protected boolean autoAcknowledge;
   protected ServiceAccountCredentials credentials;
+
+  protected int lastRate = -1;
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
                         ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
@@ -197,6 +207,8 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
         }
       }
     }
+
+    LOG.debug("Will stop");
   }
 
   /**
@@ -228,11 +240,13 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
       return;
     }
 
-    store(receivedMessages.iterator());
+    List<PubSubMessage> messages = receivedMessages.stream().map(PubSubMessage::new).collect(Collectors.toList());
+
+    store(messages.iterator());
 
     if (autoAcknowledge) {
       List<String> ackIds =
-        receivedMessages.stream().map(ReceivedMessage::getAckId).collect(Collectors.toList());
+        messages.stream().map(PubSubMessage::getAckId).collect(Collectors.toList());
 
       // Acknowledge received messages.
       AcknowledgeRequest acknowledgeRequest =
@@ -290,6 +304,7 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   protected int sleepAndIncreaseBackoff(int backoff) {
     try {
       if (!isStopped()) {
+        LOG.warn("Sleeping for {} ms.", backoff);
         Thread.sleep(backoff);
       }
     } catch (InterruptedException e) {
@@ -312,15 +327,17 @@ public class PubSubReceiver extends Receiver<ReceivedMessage> {
   /**
    * Get the rate at which this receiver should pull messages.
    * <p>
-   * The default rate is 1000 (matching Apache Bahir) if the receiver has not been able to calculate a rate.
+   * The default rate is Integer.MAX_VALUE if the receiver has not been able to calculate a rate.
    *
    * @return The current rate at which this receiver should fetch messages.
    */
   protected int getMessageRate() {
-    int messageRate = supervisor().getCurrentRateLimit() < (long) Integer.MAX_VALUE ?
-      (int) supervisor().getCurrentRateLimit() : 1000;
+    int messageRate = (int) Math.min(supervisor().getCurrentRateLimit(), Integer.MAX_VALUE);
 
-    LOG.trace("Receiver rate is: {}", messageRate);
+    if (messageRate != lastRate) {
+      lastRate = messageRate;
+      LOG.trace("Receiver fetch rate is set to: {}", messageRate);
+    }
 
     return messageRate;
   }
