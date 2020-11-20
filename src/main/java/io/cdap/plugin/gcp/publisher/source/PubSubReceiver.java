@@ -15,15 +15,10 @@
  */
 package io.cdap.plugin.gcp.publisher.source;
 
-import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.gax.core.FixedCredentialsProvider;
-import com.google.api.gax.httpjson.HttpJsonTransportChannel;
-import com.google.api.gax.httpjson.InstantiatingHttpJsonChannelProvider;
 import com.google.api.gax.rpc.ApiException;
-import com.google.api.gax.rpc.FixedTransportChannelProvider;
 import com.google.api.gax.rpc.StatusCode;
 import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.cloud.hadoop.util.RetryHttpInitializer;
 import com.google.cloud.pubsub.v1.SubscriptionAdminClient;
 import com.google.cloud.pubsub.v1.stub.GrpcSubscriberStub;
 import com.google.cloud.pubsub.v1.stub.SubscriberStub;
@@ -36,16 +31,13 @@ import com.google.pubsub.v1.PullResponse;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.ReceivedMessage;
 import org.apache.spark.storage.StorageLevel;
-import org.apache.spark.streaming.pubsub.ConnectionUtils;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.security.GeneralSecurityException;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -207,8 +199,6 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
         }
       }
     }
-
-    LOG.debug("Will stop");
   }
 
   /**

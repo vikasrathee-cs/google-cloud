@@ -15,9 +15,6 @@
  */
 package io.cdap.plugin.gcp.publisher.source;
 
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import io.cdap.cdap.api.annotation.Description;
-import io.cdap.cdap.api.annotation.Macro;
 import io.cdap.cdap.api.data.schema.Schema;
 import io.cdap.cdap.etl.api.FailureCollector;
 import io.cdap.cdap.etl.api.PipelineConfigurer;
@@ -25,19 +22,11 @@ import io.cdap.cdap.etl.api.streaming.StreamingContext;
 import io.cdap.cdap.etl.api.streaming.StreamingSource;
 import io.cdap.cdap.etl.api.streaming.StreamingSourceContext;
 import io.cdap.plugin.common.LineageRecorder;
-import io.cdap.plugin.gcp.common.GCPReferenceSourceConfig;
-import io.cdap.plugin.gcp.common.GCPUtils;
-import org.apache.spark.SparkConf;
-import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.api.java.JavaDStream;
-import org.apache.spark.streaming.api.java.JavaReceiverInputDStream;
-import org.apache.spark.streaming.dstream.ReceiverInputDStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import scala.reflect.ClassTag;
 
 import java.util.stream.Collectors;
-import javax.annotation.Nullable;
 
 /**
  * Base implementation of a Realtime source plugin to read from Google PubSub.
@@ -48,11 +37,11 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
   protected static final Logger LOG = LoggerFactory.getLogger(PubSubSubscriber.class);
 
-  protected SubscriberConfig config;
+  protected PubSubSubscriberConfig config;
   protected Schema schema;
   protected SerializableFunction<PubSubMessage, T> mappingFunction;
 
-  public PubSubSubscriber(SubscriberConfig conf, Schema schema,
+  public PubSubSubscriber(PubSubSubscriberConfig conf, Schema schema,
                           SerializableFunction<PubSubMessage, T> mappingFunction) {
     this.config = conf;
     this.schema = schema;
@@ -80,104 +69,14 @@ public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
   }
 
   @Override
-  public JavaDStream<T> getStream(StreamingContext streamingContext) throws Exception {
-    SparkConf sparkConf = streamingContext.getSparkStreamingContext().ssc().conf();
-    sparkConf.set("spark.streaming.receiver.writeAheadLog.enable", "true");
-    sparkConf.set("spark.streaming.driver.writeAheadLog.closeFileAfterWrite", "true");
-    sparkConf.set("spark.streaming.receiver.writeAheadLog.closeFileAfterWrite", "true");
-
-    ServiceAccountCredentials credentials = config.getServiceAccount() == null ?
-      null : GCPUtils.loadServiceAccountCredentials(config.getServiceAccount(),
-                                                    config.isServiceAccountFilePath());
-    boolean autoAcknowledge = true;
-    if (streamingContext.isPreviewEnabled()) {
-      autoAcknowledge = false;
-    }
-
-    JavaReceiverInputDStream<PubSubMessage> stream =
-      getInputDStream(streamingContext, credentials, autoAcknowledge);
-
-    return (JavaDStream<T>) stream.map(pubSubMessage -> mappingFunction.apply(pubSubMessage));
-  }
-
-  protected JavaReceiverInputDStream<PubSubMessage> getInputDStream(StreamingContext streamingContext,
-                                                                      ServiceAccountCredentials credentials,
-                                                                      boolean autoAcknowledge) {
-    ReceiverInputDStream<PubSubMessage> stream =
-      new PubSubInputDStream(streamingContext.getSparkStreamingContext().ssc(), config.getProject(),
-                             config.getTopic(), config.getSubscription(), credentials, StorageLevel.MEMORY_ONLY(),
-                             autoAcknowledge);
-    ClassTag<PubSubMessage> tag = scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class);
-    return new JavaReceiverInputDStream<>(stream, tag);
+  public JavaDStream<T> getStream(StreamingContext context) throws Exception {
+    return (JavaDStream<T>) PubSubSubscriberUtil.getStream(context, config)
+      .map(pubSubMessage -> mappingFunction.apply(pubSubMessage));
   }
 
   @Override
   public int getRequiredExecutors() {
-    return 1;
+    return config.getNumberOfReceivers();
   }
 
-  /**
-   * Configuration class for the subscriber source.
-   */
-  public static class SubscriberConfig extends GCPReferenceSourceConfig {
-
-    @Description("Cloud Pub/Sub subscription to read from. If a subscription with the specified name does not " +
-      "exist, it will be automatically created if a topic is specified. Messages published before the subscription " +
-      "was created will not be read.")
-    @Macro
-    private String subscription;
-
-    @Description("Cloud Pub/Sub topic to create a subscription on. This is only used when the specified  " +
-      "subscription does not already exist and needs to be automatically created. If the specified " +
-      "subscription already exists, this value is ignored.")
-    @Macro
-    @Nullable
-    private String topic;
-
-    @Description("Set the number of receivers to run in parallel. There need to be enough workers in the " +
-      "cluster to run all receivers. By default, only 1 receiver is running per Pub/Sub Source.")
-    @Macro
-    @Nullable
-    private Integer numberOfReceivers;
-
-    public void validate(FailureCollector collector) {
-      super.validate(collector);
-      String regAllowedChars = "[A-Za-z0-9-.%~+_]*$";
-      String regStartWithLetter = "[A-Za-z]";
-      if (!getSubscription().matches(regAllowedChars)) {
-        collector.addFailure("Subscription Name does not match naming convention.",
-                             "Unexpected Character. Check Plugin documentation for naming convention.")
-          .withConfigProperty(subscription);
-      }
-      if (getSubscription().startsWith("goog")) {
-        collector.addFailure("Subscription Name does not match naming convention.",
-                             " Cannot Start with String goog. Check Plugin documentation for naming convention.")
-          .withConfigProperty(subscription);
-      }
-      if (!getSubscription().substring(0, 1).matches(regStartWithLetter)) {
-        collector.addFailure("Subscription Name does not match naming convention.",
-                             "Name must start with a letter. Check Plugin documentation for naming convention.")
-          .withConfigProperty(subscription);
-      }
-      if (getSubscription().length() < 3 || getSubscription().length() > 255) {
-        collector.addFailure("Subscription Name does not match naming convention.",
-                             "Character Length must be between 3 and 255 characters. " +
-                               "Check Plugin documentation for naming convention.")
-          .withConfigProperty(subscription);
-      }
-      collector.getOrThrowException();
-    }
-
-    public String getSubscription() {
-      return subscription;
-    }
-
-    public String getTopic() {
-      return topic;
-    }
-
-    public int getNumberOfReceivers() {
-      return numberOfReceivers;
-    }
-  }
 }
