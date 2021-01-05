@@ -18,7 +18,6 @@ package io.cdap.plugin.gcp.publisher.source;
 import com.google.auth.Credentials;
 import io.cdap.cdap.etl.api.streaming.StreamingContext;
 import io.cdap.plugin.gcp.common.GCPUtils;
-import org.apache.spark.SparkConf;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaReceiverInputDStream;
@@ -47,10 +46,6 @@ public class PubSubSubscriberUtil implements Serializable {
    */
   public static JavaDStream<PubSubMessage> getStream(StreamingContext streamingContext,
                                                      PubSubSubscriberConfig config) throws Exception {
-    SparkConf sparkConf = streamingContext.getSparkStreamingContext().ssc().conf();
-    sparkConf.set("spark.streaming.receiver.writeAheadLog.enable", "true");
-    sparkConf.set("spark.streaming.driver.writeAheadLog.closeFileAfterWrite", "true");
-    sparkConf.set("spark.streaming.receiver.writeAheadLog.closeFileAfterWrite", "true");
 
     Credentials credentials = config.getServiceAccount() == null ?
       null : GCPUtils.loadServiceAccountCredentials(config.getServiceAccount(),

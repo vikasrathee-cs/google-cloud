@@ -74,13 +74,13 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   private Credentials credentials;
   private boolean autoAcknowledge;
   private BackoffConfig backoffConfig;
+  private int previousFetchRate = -1;
 
   //Transient properties used by the received in the worker node.
   private transient ScheduledThreadPoolExecutor executor = null;
   private transient SubscriberStub subscriber;
   private transient AtomicInteger bucket = null;
 
-  protected int previousFetchRate = -1;
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
                         @Nullable Credentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
@@ -120,7 +120,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   @Override
   public void onStart() {
     //Configure Executor Service
-    this.executor = new ScheduledThreadPoolExecutor(10, new LoggingRejectedExecutionHandler());
+    this.executor = new ScheduledThreadPoolExecutor(3, new LoggingRejectedExecutionHandler());
     this.executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
     this.executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
     this.executor.setRemoveOnCancelPolicy(true);

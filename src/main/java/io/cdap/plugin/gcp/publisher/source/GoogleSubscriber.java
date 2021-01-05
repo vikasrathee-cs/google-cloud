@@ -36,7 +36,6 @@ import java.time.ZonedDateTime;
 @Name("GoogleSubscriber")
 @Description("Streaming Source to read messages from Google PubSub.")
 public class GoogleSubscriber extends PubSubSubscriber<StructuredRecord> {
-  private static final Logger LOG = LoggerFactory.getLogger(GoogleSubscriber.class);
   private static final Schema DEFAULT_SCHEMA =
     Schema.recordOf("event",
                     Schema.Field.of("message", Schema.of(Schema.Type.BYTES)),
@@ -63,8 +62,7 @@ public class GoogleSubscriber extends PubSubSubscriber<StructuredRecord> {
     return ZonedDateTime.ofInstant(instant, ZoneId.ofOffset("UTC", ZoneOffset.UTC));
   }
 
-  public GoogleSubscriber(PubSubSubscriberConfig conf) {
-    super(conf, DEFAULT_SCHEMA, MAPPING_FUNCTION);
-    this.config = conf;
+  public GoogleSubscriber(PubSubSubscriberConfig config) {
+    super(config, DEFAULT_SCHEMA, MAPPING_FUNCTION);
   }
 }

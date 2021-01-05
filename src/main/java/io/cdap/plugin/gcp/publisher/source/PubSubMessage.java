@@ -20,6 +20,7 @@ import com.google.pubsub.v1.ReceivedMessage;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.Map;
 import javax.annotation.Nonnull;
 
 /**
@@ -28,14 +29,12 @@ import javax.annotation.Nonnull;
  * If backpressure is enabled, the message ingestion rate for this receiver will be managed by Spark.
  */
 public class PubSubMessage implements Serializable {
-  static final HashMap<String, String> EMPTY_MAP = new HashMap<>();
-
-  String messageId;
-  String orderingKey;
-  String ackId;
-  byte[] data;
-  HashMap<String, String> attributes;
-  Instant publishTime;
+  private String messageId;
+  private String orderingKey;
+  private String ackId;
+  private byte[] data;
+  private Map<String, String> attributes;
+  private Instant publishTime;
 
   public PubSubMessage(@Nonnull ReceivedMessage message) {
     if (message.getMessage() != null) {
@@ -75,7 +74,7 @@ public class PubSubMessage implements Serializable {
     return data;
   }
 
-  public HashMap<String, String> getAttributes() {
+  public Map<String, String> getAttributes() {
     return attributes;
   }
 

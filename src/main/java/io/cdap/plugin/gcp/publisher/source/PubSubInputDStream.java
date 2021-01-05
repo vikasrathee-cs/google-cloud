@@ -28,12 +28,12 @@ import javax.annotation.Nullable;
  */
 public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
 
-  protected String project;
-  protected String topic;
-  protected String subscription;
-  protected Credentials credentials;
-  protected StorageLevel storageLevel;
-  protected boolean autoAcknowledge;
+  private String project;
+  private String topic;
+  private String subscription;
+  private Credentials credentials;
+  private StorageLevel storageLevel;
+  private boolean autoAcknowledge;
 
   /**
    * Constructor Method

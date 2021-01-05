@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  */
 public abstract class PubSubSubscriber<T> extends StreamingSource<T> {
 
-  protected static final Logger LOG = LoggerFactory.getLogger(PubSubSubscriber.class);
+  private static final Logger LOG = LoggerFactory.getLogger(PubSubSubscriber.class);
 
   protected PubSubSubscriberConfig config;
   protected Schema schema;

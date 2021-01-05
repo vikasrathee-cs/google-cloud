@@ -20,12 +20,13 @@ import io.cdap.cdap.api.annotation.Macro;
 import io.cdap.cdap.etl.api.FailureCollector;
 import io.cdap.plugin.gcp.common.GCPReferenceSourceConfig;
 
+import java.io.Serializable;
 import javax.annotation.Nullable;
 
 /**
  * Configuration class for the subscriber source.
  */
-public class PubSubSubscriberConfig extends GCPReferenceSourceConfig {
+public class PubSubSubscriberConfig extends GCPReferenceSourceConfig implements Serializable {
 
   @Description("Cloud Pub/Sub subscription to read from. If a subscription with the specified name does not " +
     "exist, it will be automatically created if a topic is specified. Messages published before the subscription " +
@@ -83,6 +84,6 @@ public class PubSubSubscriberConfig extends GCPReferenceSourceConfig {
   }
 
   public Integer getNumberOfReceivers() {
-    return numberOfReceivers;
+    return numberOfReceivers != null ? numberOfReceivers : 1;
   }
 }
