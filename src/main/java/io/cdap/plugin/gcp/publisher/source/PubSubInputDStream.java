@@ -15,7 +15,7 @@
  */
 package io.cdap.plugin.gcp.publisher.source;
 
-import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.auth.Credentials;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.StreamingContext;
 import org.apache.spark.streaming.dstream.ReceiverInputDStream;
@@ -31,7 +31,7 @@ public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
   protected String project;
   protected String topic;
   protected String subscription;
-  protected ServiceAccountCredentials credentials;
+  protected Credentials credentials;
   protected StorageLevel storageLevel;
   protected boolean autoAcknowledge;
 
@@ -47,7 +47,7 @@ public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
    * @param autoAcknowledge  Acknowledge messages
    */
   PubSubInputDStream(StreamingContext streamingContext, String project, @Nullable String topic,
-                     String subscription, ServiceAccountCredentials credentials, StorageLevel storageLevel,
+                     String subscription, Credentials credentials, StorageLevel storageLevel,
                      boolean autoAcknowledge) {
     super(streamingContext, scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class));
     this.project = project;

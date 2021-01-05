@@ -18,18 +18,19 @@ package io.cdap.plugin.gcp.publisher.source;
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.api.gax.rpc.ApiException;
 import com.google.api.gax.rpc.StatusCode;
-import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.auth.Credentials;
 import com.google.cloud.pubsub.v1.SubscriptionAdminClient;
 import com.google.cloud.pubsub.v1.stub.GrpcSubscriberStub;
 import com.google.cloud.pubsub.v1.stub.SubscriberStub;
 import com.google.cloud.pubsub.v1.stub.SubscriberStubSettings;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.pubsub.v1.AcknowledgeRequest;
 import com.google.pubsub.v1.ProjectSubscriptionName;
-import com.google.pubsub.v1.ProjectTopicName;
 import com.google.pubsub.v1.PullRequest;
 import com.google.pubsub.v1.PullResponse;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.ReceivedMessage;
+import com.google.pubsub.v1.TopicName;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
@@ -38,6 +39,11 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -49,46 +55,114 @@ import javax.annotation.Nullable;
 public class PubSubReceiver extends Receiver<PubSubMessage> {
 
   private static final Logger LOG = LoggerFactory.getLogger(PubSubReceiver.class);
+  private static final String CREATE_SUBSCRIPTION_ERROR_MSG =
+    "Failed to create subscription '%s'.";
+  private static final String CREATE_SUBSCRIPTION_ADMIN_CLIENT_ERROR_MSG =
+    "Failed to create subscription client to manage subscription '%s'.";
+  private static final String CREATE_SUBSCRIPTION_RETRY_ERROR_MSG =
+    "Failed to create subscription '%s' after 5 attempts";
+  private static final String MISSING_TOPIC_ERROR_MSG =
+    "Failed to create subscription. Topic '%s' was not found in project '%s'.";
+  private static final String SUBSCRIBER_ERROR_MSG =
+    "Failed to create subscriber using subscription '%s' for project '%s'.";
+  private static final String FETCH_ERROR_MSG =
+    "Failed to fetch new messages using subscription '%s' for project '%s'.";
 
-  protected BackoffConfig backoffConfig;
-  protected String project;
-  protected String topic;
-  protected String subscription;
-  protected boolean autoAcknowledge;
-  protected ServiceAccountCredentials credentials;
+  private String project;
+  private String topic;
+  private String subscription;
+  private Credentials credentials;
+  private boolean autoAcknowledge;
+  private BackoffConfig backoffConfig;
 
-  protected int lastRate = -1;
+  //Transient properties used by the received in the worker node.
+  private transient ScheduledThreadPoolExecutor executor = null;
+  private transient SubscriberStub subscriber;
+  private transient AtomicInteger bucket = null;
+
+  protected int previousFetchRate = -1;
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
-                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
+                        @Nullable Credentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
     this(project, topic, subscription, credentials, autoAcknowledge, storageLevel,
-         BackoffConfigBuilder.getInstance().build());
+         BackoffConfig.defaultInstance());
   }
 
   public PubSubReceiver(String project, @Nullable String topic, String subscription,
-                        ServiceAccountCredentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
+                        @Nullable Credentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
                         BackoffConfig backoffConfig) {
     super(storageLevel);
 
-    this.backoffConfig = backoffConfig;
     this.project = project;
     this.topic = topic;
     this.subscription = subscription;
     this.credentials = credentials;
     this.autoAcknowledge = autoAcknowledge;
+    this.backoffConfig = backoffConfig;
+  }
+
+  @VisibleForTesting
+  public PubSubReceiver(String project, String topic, String subscription, Credentials credentials,
+                        boolean autoAcknowledge, StorageLevel storageLevel, BackoffConfig backoffConfig,
+                        ScheduledThreadPoolExecutor executor, SubscriberStub subscriber, AtomicInteger bucket) {
+    super(storageLevel);
+    this.backoffConfig = backoffConfig;
+    this.project = project;
+    this.topic = topic;
+    this.subscription = subscription;
+    this.autoAcknowledge = autoAcknowledge;
+    this.credentials = credentials;
+    this.executor = executor;
+    this.subscriber = subscriber;
+    this.bucket = bucket;
   }
 
   @Override
   public void onStart() {
+    //Configure Executor Service
+    this.executor = new ScheduledThreadPoolExecutor(10, new LoggingRejectedExecutionHandler());
+    this.executor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+    this.executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+    this.executor.setRemoveOnCancelPolicy(true);
+
+    //Create counter used to restrict the number of messages we fetch every second.
+    this.bucket = new AtomicInteger();
+
+    //Create subscription if the topic is specified.
     if (topic != null) {
       createSubscription();
     }
-    new Thread(this::receive).start();
+
+    //Schedule tasks to set the message rate (Token Bucket algorithm) and start the receiver worker.
+    this.executor.scheduleAtFixedRate(this::getAndUpdateMessageRate, 0, 1, TimeUnit.SECONDS);
+    this.executor.submit(this::receive);
+
+    LOG.info("Receiver started execution");
   }
 
   @Override
   public void onStop() {
-    //no-op
+    //Shutdown thread pool executor
+    if (executor != null && !executor.isShutdown()) {
+      executor.shutdown();
+      try {
+        executor.awaitTermination(30, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        LOG.error("InterruptedException while waiting for executor to shutdown.");
+      }
+    }
+
+    //Clean up subscriber stub used by the Google Cloud client.
+    if (subscriber != null && !subscriber.isShutdown()) {
+      subscriber.shutdown();
+      try {
+        subscriber.awaitTermination(30, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        LOG.error("InterruptedException while waiting for subscriber to shutdown.");
+      }
+    }
+
+    LOG.info("Receiver completed execution");
   }
 
   /**
@@ -108,7 +182,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
 
       try (SubscriptionAdminClient subscriptionAdminClient = getSubscriptionAdminClient()) {
 
-        ProjectTopicName topicName = ProjectTopicName.of(project, topic);
+        TopicName topicName = TopicName.of(project, topic);
         ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(project, subscription);
         int ackDeadline = 10; //10 seconds before resending the message.
         subscriptionAdminClient.createSubscription(
@@ -124,13 +198,12 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
           return;
         }
 
-        //This error is thrown is the Topic Name is not valid.
-        //Throw an Illegal Argument Exception so the pipeline fails.
+        //This error is thrown is the Topic does not exist.
+        // Call the stop method so the pipeline fails.
         if (ae.getStatusCode().getCode().equals(StatusCode.Code.NOT_FOUND)) {
-          String message = String.format("Failed to create subscription. Topic '%s' was not found in project '%s'.",
-                                         topic,
-                                         project);
-          throw new IllegalArgumentException(message, ae);
+          String message = String.format(MISSING_TOPIC_ERROR_MSG, topic, project);
+          stop(message, ae);
+          continue;
         }
 
         //Retry if the exception is retriable.
@@ -139,9 +212,11 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
           continue;
         }
 
-        throw ae;
+        //Report that we were not able to create the subscription and stop the receiver.
+        stop(String.format(CREATE_SUBSCRIPTION_ERROR_MSG, subscription), ae);
       } catch (IOException ioe) {
-        throw new RuntimeException("Failed to create subscription.", ioe);
+        //Report that we were not able to create the subscription admin client and stop the receiver.
+        stop(String.format(CREATE_SUBSCRIPTION_ADMIN_CLIENT_ERROR_MSG, subscription), ioe);
       }
 
     }
@@ -150,7 +225,8 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
       return;
     }
 
-    throw new RuntimeException("Failed to create subscription after 5 attempts.", lastApiException);
+    //If we were not able to create the subscription after 5 attempts, stop the pipeline and report the error.
+    stop(String.format(CREATE_SUBSCRIPTION_RETRY_ERROR_MSG, subscription), lastApiException);
   }
 
   /**
@@ -160,20 +236,20 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
    * @throws RuntimeException when the GrpcSubscriberStub cannot be created.
    */
   public void receive() {
-    SubscriberStubSettings subscriberStubSettings = getSubscriberStubSettings();
-
-    LOG.debug("Receiver Started execution");
-
-    try (SubscriberStub subscriber = getSubscriberStub(subscriberStubSettings)) {
+    try {
+      SubscriberStubSettings subscriberSettings = getSubscriberSettings();
+      subscriber = getSubscriber(subscriberSettings);
       String subscriptionName = ProjectSubscriptionName.format(project, subscription);
-      fetchMessagesUntilStopped(subscriber, subscriptionName);
-    } catch (IOException | ApiException e) {
-      String message =
-        String.format("Failed to fetch new messages using subscription '%s' for project '%s'.", subscription, project);
-      throw new RuntimeException(message, e);
-    }
 
-    LOG.debug("Receiver completed execution");
+      executor.scheduleWithFixedDelay(
+        () -> fetchWithBackoff(subscriber, subscriptionName), 0, 100, TimeUnit.MILLISECONDS);
+    } catch (IOException ioe) {
+      //This exception is thrown when the subscriber could not be created.
+      //Report the exception and stop the receiver.
+      String message =
+        String.format(SUBSCRIBER_ERROR_MSG, subscription, project);
+      stop(message, ioe);
+    }
   }
 
   /**
@@ -184,18 +260,23 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
    * @param subscriptionName The name of the subscription to use to pull data.
    * @throws ApiException when the Pub/Sub API throws a non-retryable exception.
    */
-  protected void fetchMessagesUntilStopped(SubscriberStub subscriber, String subscriptionName) {
+  protected void fetchWithBackoff(SubscriberStub subscriber, String subscriptionName) {
     int backoff = backoffConfig.getInitialBackoffMs();
 
+    //Try with backoff until stopped or the task succeeds.
     while (!isStopped()) {
       try {
         fetchAndStoreMessages(subscriber, subscriptionName);
         backoff = backoffConfig.getInitialBackoffMs();
+        return;
       } catch (ApiException ae) {
         if (ae.isRetryable()) {
           backoff = sleepAndIncreaseBackoff(backoff);
         } else {
-          throw ae;
+          //Restart the receiver if the exception is not retryable.
+          String message =
+            String.format(FETCH_ERROR_MSG, subscription, project);
+          restart(message, ae);
         }
       }
     }
@@ -210,9 +291,15 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
    * @throws ApiException when the Pull request or ACK request fail.
    */
   protected void fetchAndStoreMessages(SubscriberStub subscriber, String subscriptionName) {
+    //Get the maximun number of messages to get. If this number is less or equal than 0, do not fetch.
+    int maxMessages = bucket.get();
+    if (maxMessages <= 0) {
+      return;
+    }
+
     PullRequest pullRequest =
       PullRequest.newBuilder()
-        .setMaxMessages(getMessageRate())
+        .setMaxMessages(maxMessages)
         .setSubscription(subscriptionName)
         .build();
     PullResponse pullResponse = subscriber.pullCallable().call(pullRequest);
@@ -223,6 +310,9 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     if (receivedMessages.isEmpty()) {
       return;
     }
+
+    //Decrement number of available messages in bucket.
+    bucket.updateAndGet(x -> x - receivedMessages.size());
 
     //Exit if the receiver is stopped before storing.
     if (isStopped()) {
@@ -249,19 +339,18 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   }
 
   /**
-   * Get Subscriber settings.
+   * Get Subscriber settings instance.
    *
    * @return the Subscriber Stub settings needed to subscribe to a Pub/Sub topic.
    */
-  protected SubscriberStubSettings getSubscriberStubSettings() {
-    try {
-      return SubscriberStubSettings.newBuilder()
-        .setCredentialsProvider(FixedCredentialsProvider.create(credentials))
-        .build();
-    } catch (IOException ioe) {
-      throw new RuntimeException("Failed to fetch messages. " +
-                                   "Unable to create subscriber settings using the supplied credentials.", ioe);
+  protected SubscriberStubSettings getSubscriberSettings() throws IOException {
+    SubscriberStubSettings.Builder builder = SubscriberStubSettings.newBuilder();
+
+    if (credentials != null) {
+      builder.setCredentialsProvider(FixedCredentialsProvider.create(credentials));
     }
+
+    return builder.build();
   }
 
   /**
@@ -281,7 +370,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
    * @return a new Subscriber Stub Instance
    * @throws IOException the exception thrown by the Pub/Sub library if the Subscriber Stub Settings are invalid.
    */
-  protected SubscriberStub getSubscriberStub(SubscriberStubSettings subscriberStubSettings) throws IOException {
+  protected SubscriberStub getSubscriber(SubscriberStubSettings subscriberStubSettings) throws IOException {
     return GrpcSubscriberStub.create(subscriberStubSettings);
   }
 
@@ -294,7 +383,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   protected int sleepAndIncreaseBackoff(int backoff) {
     try {
       if (!isStopped()) {
-        LOG.warn("Sleeping for {} ms.", backoff);
+        LOG.debug("Backoff - Sleeping for {} ms.", backoff);
         Thread.sleep(backoff);
       }
     } catch (InterruptedException e) {
@@ -321,13 +410,15 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
    *
    * @return The current rate at which this receiver should fetch messages.
    */
-  protected int getMessageRate() {
+  protected int getAndUpdateMessageRate() {
     int messageRate = (int) Math.min(supervisor().getCurrentRateLimit(), Integer.MAX_VALUE);
 
-    if (messageRate != lastRate) {
-      lastRate = messageRate;
-      LOG.trace("Receiver fetch rate is set to: {}", messageRate);
+    if (messageRate != previousFetchRate) {
+      previousFetchRate = messageRate;
+      LOG.debug("Receiver fetch rate is set to: {}", messageRate);
     }
+
+    bucket.set(messageRate);
 
     return messageRate;
   }
@@ -339,6 +430,10 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     final int initialBackoffMs;
     final int maximumBackoffMs;
     final double backoffFactor;
+
+    static final BackoffConfig defaultInstance() {
+      return new BackoffConfig(100, 10000, 2.0);
+    }
 
     public BackoffConfig(int initialBackoffMs, int maximumBackoffMs, double backoffFactor) {
       this.initialBackoffMs = initialBackoffMs;
@@ -407,6 +502,16 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     public BackoffConfigBuilder setBackoffFactor(int backoffFactor) {
       this.backoffFactor = backoffFactor;
       return this;
+    }
+  }
+
+  /**
+   * Rejected execution handler which logs a message when a task is rejected.
+   */
+  protected static class LoggingRejectedExecutionHandler implements RejectedExecutionHandler {
+    @Override
+    public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+      LOG.error("Thread Pool rejected execution of a task.");
     }
   }
 }

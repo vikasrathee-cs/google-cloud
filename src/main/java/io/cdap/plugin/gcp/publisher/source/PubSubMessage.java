@@ -30,12 +30,12 @@ import javax.annotation.Nonnull;
 public class PubSubMessage implements Serializable {
   static final HashMap<String, String> EMPTY_MAP = new HashMap<>();
 
-  String messageId = null;
-  String orderingKey = null;
+  String messageId;
+  String orderingKey;
   String ackId;
-  byte[] data = null;
-  HashMap<String, String> attributes = null;
-  Instant publishTime = null;
+  byte[] data;
+  HashMap<String, String> attributes;
+  Instant publishTime;
 
   public PubSubMessage(@Nonnull ReceivedMessage message) {
     if (message.getMessage() != null) {

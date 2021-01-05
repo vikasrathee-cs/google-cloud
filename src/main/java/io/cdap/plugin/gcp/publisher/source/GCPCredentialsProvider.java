@@ -34,7 +34,7 @@ import javax.annotation.Nullable;
  * Hack to replace the one in Bahir, which is incompatible with the version of the pubsub library
  * used by this project.
  */
-public class GCPCredentialsProvider implements SparkGCPCredentials {
+public class  GCPCredentialsProvider implements SparkGCPCredentials {
   private final String serviceAccount;
   private final boolean isServiceAccountFilePath;
   private transient Credential credential;

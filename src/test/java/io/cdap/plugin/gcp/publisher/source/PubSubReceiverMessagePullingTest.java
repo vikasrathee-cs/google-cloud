@@ -3,6 +3,7 @@ package io.cdap.plugin.gcp.publisher.source;
 import com.google.api.gax.rpc.ApiException;
 import com.google.api.gax.rpc.StatusCode;
 import com.google.api.gax.rpc.UnaryCallable;
+import com.google.auth.Credentials;
 import com.google.cloud.pubsub.v1.stub.SubscriberStub;
 import com.google.cloud.pubsub.v1.stub.SubscriberStubSettings;
 import com.google.protobuf.Empty;
@@ -11,6 +12,8 @@ import com.google.pubsub.v1.AcknowledgeRequest;
 import com.google.pubsub.v1.PullRequest;
 import com.google.pubsub.v1.PullResponse;
 import com.google.pubsub.v1.ReceivedMessage;
+import org.apache.spark.api.java.StorageLevels;
+import org.apache.spark.storage.StorageLevel;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -28,6 +31,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -40,10 +45,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.powermock.api.mockito.PowerMockito.spy;
 
 @RunWith(PowerMockRunner.class)
 @PrepareForTest({UnaryCallable.class, PullResponse.class, GeneratedMessageV3.class, ReceivedMessage.class})
 public class PubSubReceiverMessagePullingTest {
+
+  Credentials credentials = null;
+  boolean autoAcknowledge = false;
+  StorageLevel level = StorageLevels.MEMORY_ONLY;
+  AtomicInteger tokenBucket = new AtomicInteger();
 
   @Mock
   StatusCode statusCode;
@@ -52,12 +63,11 @@ public class PubSubReceiverMessagePullingTest {
   ApiException apiException;
 
   @Mock
-  SubscriberStubSettings subscriberStubSettings;
+  SubscriberStubSettings subscriberSettings;
 
   @Mock
-  SubscriberStub subscriberStub;
+  SubscriberStub subscriber;
 
-  @Mock
   PubSubReceiver receiver;
 
   @Mock
@@ -65,6 +75,12 @@ public class PubSubReceiverMessagePullingTest {
 
   @Mock
   UnaryCallable<AcknowledgeRequest, Empty> acknowledgeCallable;
+
+  @Mock
+  PubSubReceiver.BackoffConfig backoffConfig;
+
+  @Mock
+  ScheduledThreadPoolExecutor executor;
 
   @Captor
   ArgumentCaptor<PullRequest> pullRequestArgumentCaptor;
@@ -74,21 +90,20 @@ public class PubSubReceiverMessagePullingTest {
 
   @Before
   public void setup() throws IOException {
-    when(receiver.getSubscriberStubSettings()).thenReturn(subscriberStubSettings);
-    when(receiver.getSubscriberStub(any())).thenReturn(subscriberStub);
-    when(receiver.getMessageRate()).thenReturn(12345);
+    receiver = new PubSubReceiver("my-project", "my-topic", "my-subscription", credentials,
+                                  autoAcknowledge, level, backoffConfig, executor, subscriber, tokenBucket);
+    receiver = spy(receiver);
 
-    receiver.project = "my-project";
-    receiver.topic = "my-topic";
-    receiver.subscription = "my-subscription";
-    receiver.backoffConfig = mock(PubSubReceiver.BackoffConfig.class);
+    when(receiver.getSubscriberSettings()).thenReturn(subscriberSettings);
+    when(receiver.getSubscriber(any())).thenReturn(subscriber);
+    when(receiver.getAndUpdateMessageRate()).thenReturn(12345);
 
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
-    when(receiver.backoffConfig.getBackoffFactor()).thenReturn(2.0);
-    when(receiver.backoffConfig.getMaximumBackoffMs()).thenReturn(10000);
+    when(backoffConfig.getInitialBackoffMs()).thenReturn(100);
+    when(backoffConfig.getBackoffFactor()).thenReturn(2.0);
+    when(backoffConfig.getMaximumBackoffMs()).thenReturn(10000);
 
-    when(subscriberStub.pullCallable()).thenReturn(pullCallable);
-    when(subscriberStub.acknowledgeCallable()).thenReturn(acknowledgeCallable);
+    when(subscriber.pullCallable()).thenReturn(pullCallable);
+    when(subscriber.acknowledgeCallable()).thenReturn(acknowledgeCallable);
   }
 
   public ReceivedMessage getReceivedMessage(String ackId) {
@@ -103,7 +118,7 @@ public class PubSubReceiverMessagePullingTest {
     receiver.receive();
 
     verify(receiver, times(1))
-      .fetchMessagesUntilStopped(subscriberStub, "projects/my-project/subscriptions/my-subscription");
+      .fetchWithBackoff(subscriber, "projects/my-project/subscriptions/my-subscription");
   }
 
   @Test(expected = RuntimeException.class)
@@ -122,7 +137,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAckWithRetry() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
+    doCallRealMethod().when(receiver).fetchWithBackoff(any(), anyString());
 
     //Stop after 3 iterations
     when(receiver.isStopped())
@@ -131,14 +146,14 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
+    receiver.fetchWithBackoff(subscriber, "some-sub");
 
-    verify(receiver, times(3)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
+    verify(receiver, times(3)).fetchAndStoreMessages(eq(subscriber), eq("some-sub"));
   }
 
   @Test
   public void testFetchAckWithRetryBackoff() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
+    doCallRealMethod().when(receiver).fetchWithBackoff(any(), anyString());
     when(apiException.isRetryable()).thenReturn(true);
 
     doThrow(apiException).when(receiver).fetchAndStoreMessages(any(), anyString());
@@ -159,9 +174,9 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
+    receiver.fetchWithBackoff(subscriber, "some-sub");
 
-    verify(receiver, times(5)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
+    verify(receiver, times(5)).fetchAndStoreMessages(eq(subscriber), eq("some-sub"));
     verify(receiver, times(5)).sleepAndIncreaseBackoff(anyInt());
     verify(receiver).sleepAndIncreaseBackoff(100);
     verify(receiver).sleepAndIncreaseBackoff(200);
@@ -172,7 +187,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAckWithRetryBackoffRecovery() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
+    doCallRealMethod().when(receiver).fetchWithBackoff(any(), anyString());
     when(apiException.isRetryable()).thenReturn(true);
 
     doAnswer(new Answer<Void>() {
@@ -209,10 +224,10 @@ public class PubSubReceiverMessagePullingTest {
       .thenReturn(false)
       .thenReturn(true);
 
-    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
+    receiver.fetchWithBackoff(subscriber, "some-sub");
 
-    verify(receiver, times(7)).fetchAndStoreMessages(eq(subscriberStub), eq("some-sub"));
-    verify(receiver.backoffConfig, times(2)).getInitialBackoffMs();
+    verify(receiver, times(7)).fetchAndStoreMessages(eq(subscriber), eq("some-sub"));
+    verify(backoffConfig, times(2)).getInitialBackoffMs();
     verify(receiver, times(6)).sleepAndIncreaseBackoff(anyInt());
     verify(receiver, times(2)).sleepAndIncreaseBackoff(100);
     verify(receiver, times(2)).sleepAndIncreaseBackoff(200);
@@ -221,7 +236,7 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test(expected = ApiException.class)
   public void testFetchAckThrowsNonRetryableApiException() throws IOException {
-    doCallRealMethod().when(receiver).fetchMessagesUntilStopped(any(), anyString());
+    doCallRealMethod().when(receiver).fetchWithBackoff(any(), anyString());
     when(apiException.isRetryable()).thenReturn(false);
 
     when(statusCode.getCode()).thenReturn(StatusCode.Code.INVALID_ARGUMENT);
@@ -230,14 +245,13 @@ public class PubSubReceiverMessagePullingTest {
 
     when(receiver.isStopped()).thenReturn(false);
 
-    receiver.fetchMessagesUntilStopped(subscriberStub, "some-sub");
+    receiver.fetchWithBackoff(subscriber, "some-sub");
   }
 
   @Test
   public void testFetchAndAckWithAutoAcknowledge() throws IOException {
     doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
-    receiver.autoAcknowledge = true;
 
     //Set up messages list
     List<ReceivedMessage> messages = Arrays.asList(getReceivedMessage("a"), getReceivedMessage("b"));
@@ -245,7 +259,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriber, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(1)).store(any(Iterator.class));
@@ -261,9 +275,11 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAndAckWithoutAutoAcknowledge() throws IOException {
+    receiver = new PubSubReceiver("my-project", "my-topic", "my-subscription", credentials,
+                                  false, level, backoffConfig, executor, subscriber, tokenBucket);
+
     doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
-    receiver.autoAcknowledge = false;
 
     //Set up messages list
     List<ReceivedMessage> messages = Arrays.asList(getReceivedMessage("a"), getReceivedMessage("b"));
@@ -271,7 +287,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriber, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(1)).store(any(Iterator.class));
@@ -283,9 +299,11 @@ public class PubSubReceiverMessagePullingTest {
 
   @Test
   public void testFetchAndAckReturnsNoNewMessages() throws IOException {
+    receiver = new PubSubReceiver("my-project", "my-topic", "my-subscription", credentials,
+                                  false, level, backoffConfig, executor, subscriber, tokenBucket);
+
     doCallRealMethod().when(receiver).fetchAndStoreMessages(any(), anyString());
     when(receiver.isStopped()).thenReturn(false);
-    receiver.autoAcknowledge = false;
 
     //Set up messages list
     List<ReceivedMessage> messages = Collections.emptyList();
@@ -293,7 +311,7 @@ public class PubSubReceiverMessagePullingTest {
 
     when(pullCallable.call(any())).thenReturn(response);
 
-    receiver.fetchAndStoreMessages(subscriberStub, "some-sub");
+    receiver.fetchAndStoreMessages(subscriber, "some-sub");
 
     verify(pullCallable, times(1)).call(pullRequestArgumentCaptor.capture());
     verify(receiver, times(0)).store(any(Iterator.class));
@@ -305,9 +323,9 @@ public class PubSubReceiverMessagePullingTest {
     doCallRealMethod().when(receiver).calculateUpdatedBackoff(anyInt());
     int backoff;
 
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(100);
-    when(receiver.backoffConfig.getBackoffFactor()).thenReturn(2.0);
-    when(receiver.backoffConfig.getMaximumBackoffMs()).thenReturn(1000);
+    when(backoffConfig.getInitialBackoffMs()).thenReturn(100);
+    when(backoffConfig.getBackoffFactor()).thenReturn(2.0);
+    when(backoffConfig.getMaximumBackoffMs()).thenReturn(1000);
 
     backoff = 100;
     backoff = receiver.calculateUpdatedBackoff(backoff);
@@ -321,9 +339,9 @@ public class PubSubReceiverMessagePullingTest {
     backoff = receiver.calculateUpdatedBackoff(backoff);
     Assert.assertEquals(backoff, 1000);
 
-    when(receiver.backoffConfig.getInitialBackoffMs()).thenReturn(50);
-    when(receiver.backoffConfig.getBackoffFactor()).thenReturn(4.0);
-    when(receiver.backoffConfig.getMaximumBackoffMs()).thenReturn(950);
+    when(backoffConfig.getInitialBackoffMs()).thenReturn(50);
+    when(backoffConfig.getBackoffFactor()).thenReturn(4.0);
+    when(backoffConfig.getMaximumBackoffMs()).thenReturn(950);
 
     backoff = 50;
     backoff = receiver.calculateUpdatedBackoff(backoff);

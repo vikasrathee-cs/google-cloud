@@ -15,14 +15,8 @@
  */
 package io.cdap.plugin.gcp.publisher.source;
 
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import io.cdap.cdap.api.data.schema.Schema;
-import io.cdap.cdap.etl.api.FailureCollector;
-import io.cdap.cdap.etl.api.PipelineConfigurer;
+import com.google.auth.Credentials;
 import io.cdap.cdap.etl.api.streaming.StreamingContext;
-import io.cdap.cdap.etl.api.streaming.StreamingSource;
-import io.cdap.cdap.etl.api.streaming.StreamingSourceContext;
-import io.cdap.plugin.common.LineageRecorder;
 import io.cdap.plugin.gcp.common.GCPUtils;
 import org.apache.spark.SparkConf;
 import org.apache.spark.storage.StorageLevel;
@@ -35,7 +29,6 @@ import scala.Serializable;
 import scala.reflect.ClassTag;
 
 import java.util.ArrayList;
-import java.util.stream.Collectors;
 
 /**
  * Utility class to create a JavaDStream of received messages.
@@ -59,7 +52,7 @@ public class PubSubSubscriberUtil implements Serializable {
     sparkConf.set("spark.streaming.driver.writeAheadLog.closeFileAfterWrite", "true");
     sparkConf.set("spark.streaming.receiver.writeAheadLog.closeFileAfterWrite", "true");
 
-    ServiceAccountCredentials credentials = config.getServiceAccount() == null ?
+    Credentials credentials = config.getServiceAccount() == null ?
       null : GCPUtils.loadServiceAccountCredentials(config.getServiceAccount(),
                                                     config.isServiceAccountFilePath());
     boolean autoAcknowledge = true;
@@ -85,7 +78,7 @@ public class PubSubSubscriberUtil implements Serializable {
   @SuppressWarnings("unchecked")
   protected static JavaDStream<PubSubMessage> getInputDStream(StreamingContext streamingContext,
                                                               PubSubSubscriberConfig config,
-                                                              ServiceAccountCredentials credentials,
+                                                              Credentials credentials,
                                                               boolean autoAcknowledge) {
     ArrayList<JavaDStream<PubSubMessage>> receivers = new ArrayList<>(config.getNumberOfReceivers());
     ClassTag<PubSubMessage> tag = scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class);
