@@ -31,6 +31,7 @@ import com.google.pubsub.v1.PullResponse;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.ReceivedMessage;
 import com.google.pubsub.v1.TopicName;
+import io.cdap.plugin.gcp.common.GCPUtils;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.receiver.Receiver;
 import org.slf4j.Logger;
@@ -68,35 +69,29 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   private static final String FETCH_ERROR_MSG =
     "Failed to fetch new messages using subscription '%s' for project '%s'.";
 
-  private String project;
-  private String topic;
-  private String subscription;
-  private Credentials credentials;
+  private PubSubSubscriberConfig config;
   private boolean autoAcknowledge;
   private BackoffConfig backoffConfig;
   private int previousFetchRate = -1;
 
-  //Transient properties used by the received in the worker node.
-  private transient ScheduledThreadPoolExecutor executor = null;
+  //Transient properties used by the receiver in the worker node.
+  private transient String project;
+  private transient String topic;
+  private transient String subscription;
+  private transient Credentials credentials;
+  private transient ScheduledThreadPoolExecutor executor;
   private transient SubscriberStub subscriber;
-  private transient AtomicInteger bucket = null;
+  private transient AtomicInteger bucket;
 
-
-  public PubSubReceiver(String project, @Nullable String topic, String subscription,
-                        @Nullable Credentials credentials, boolean autoAcknowledge, StorageLevel storageLevel) {
-    this(project, topic, subscription, credentials, autoAcknowledge, storageLevel,
-         BackoffConfig.defaultInstance());
+  public PubSubReceiver(PubSubSubscriberConfig config, boolean autoAcknowledge, StorageLevel storageLevel) {
+    this(config, autoAcknowledge, storageLevel, BackoffConfig.defaultInstance());
   }
 
-  public PubSubReceiver(String project, @Nullable String topic, String subscription,
-                        @Nullable Credentials credentials, boolean autoAcknowledge, StorageLevel storageLevel,
+  public PubSubReceiver(PubSubSubscriberConfig config, boolean autoAcknowledge, StorageLevel storageLevel,
                         BackoffConfig backoffConfig) {
     super(storageLevel);
 
-    this.project = project;
-    this.topic = topic;
-    this.subscription = subscription;
-    this.credentials = credentials;
+    this.config = config;
     this.autoAcknowledge = autoAcknowledge;
     this.backoffConfig = backoffConfig;
   }
@@ -127,6 +122,20 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
 
     //Create counter used to restrict the number of messages we fetch every second.
     this.bucket = new AtomicInteger();
+
+    //Configure properties
+    this.project = config.getProject();
+    this.topic = config.getTopic();
+    this.subscription = config.getSubscription();
+
+    try {
+      this.credentials = config.getServiceAccount() == null ?
+        null : GCPUtils.loadServiceAccountCredentials(config.getServiceAccount(),
+                                                      config.isServiceAccountFilePath());
+    } catch (IOException e) {
+      LOG.error("Unable to get credentials.");
+      stop("Unable to get credentials for receiver.", e);
+    }
 
     //Create subscription if the topic is specified.
     if (topic != null) {

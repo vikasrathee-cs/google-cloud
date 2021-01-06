@@ -28,10 +28,7 @@ import javax.annotation.Nullable;
  */
 public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
 
-  private String project;
-  private String topic;
-  private String subscription;
-  private Credentials credentials;
+  private PubSubSubscriberConfig config;
   private StorageLevel storageLevel;
   private boolean autoAcknowledge;
 
@@ -39,33 +36,22 @@ public class PubSubInputDStream extends ReceiverInputDStream<PubSubMessage> {
    * Constructor Method
    *
    * @param streamingContext Spark Streaming Context
-   * @param project          Project Name
-   * @param topic            Topic Name
-   * @param subscription     Subscription Name
-   * @param credentials      Google Cloud credentials
+   * @param config           Configuration
    * @param storageLevel     Spark Storage Level for received messages
    * @param autoAcknowledge  Acknowledge messages
    */
-  PubSubInputDStream(StreamingContext streamingContext, String project, @Nullable String topic,
-                     String subscription, Credentials credentials, StorageLevel storageLevel,
+  PubSubInputDStream(StreamingContext streamingContext, PubSubSubscriberConfig config, StorageLevel storageLevel,
                      boolean autoAcknowledge) {
     super(streamingContext, scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class));
-    this.project = project;
-    this.topic = topic;
-    this.subscription = subscription;
-    this.credentials = credentials;
+    this.config = config;
     this.storageLevel = storageLevel;
     this.autoAcknowledge = autoAcknowledge;
   }
 
 
-
   @Override
   public Receiver<PubSubMessage> getReceiver() {
-    return new PubSubReceiver(this.project,
-                              this.topic,
-                              this.subscription,
-                              this.credentials,
+    return new PubSubReceiver(this.config,
                               this.autoAcknowledge,
                               this.storageLevel);
   }

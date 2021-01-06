@@ -46,17 +46,13 @@ public class PubSubSubscriberUtil implements Serializable {
    */
   public static JavaDStream<PubSubMessage> getStream(StreamingContext streamingContext,
                                                      PubSubSubscriberConfig config) throws Exception {
-
-    Credentials credentials = config.getServiceAccount() == null ?
-      null : GCPUtils.loadServiceAccountCredentials(config.getServiceAccount(),
-                                                    config.isServiceAccountFilePath());
     boolean autoAcknowledge = true;
     if (streamingContext.isPreviewEnabled()) {
       autoAcknowledge = false;
     }
 
     JavaDStream<PubSubMessage> stream =
-      getInputDStream(streamingContext, config, credentials, autoAcknowledge);
+      getInputDStream(streamingContext, config, autoAcknowledge);
 
     return stream;
   }
@@ -66,22 +62,19 @@ public class PubSubSubscriberUtil implements Serializable {
    *
    * @param streamingContext the streaming context
    * @param config           subscriber config
-   * @param credentials      GCP credentials
    * @param autoAcknowledge  if the messages should be acknowleged or not.
    * @return JavaDStream containing all received messages.
    */
   @SuppressWarnings("unchecked")
   protected static JavaDStream<PubSubMessage> getInputDStream(StreamingContext streamingContext,
                                                               PubSubSubscriberConfig config,
-                                                              Credentials credentials,
                                                               boolean autoAcknowledge) {
     ArrayList<JavaDStream<PubSubMessage>> receivers = new ArrayList<>(config.getNumberOfReceivers());
     ClassTag<PubSubMessage> tag = scala.reflect.ClassTag$.MODULE$.apply(PubSubMessage.class);
 
     for (int i = 1; i <= config.getNumberOfReceivers(); i++) {
       ReceiverInputDStream<PubSubMessage> receiverInputDStream =
-        new PubSubInputDStream(streamingContext.getSparkStreamingContext().ssc(), config.getProject(),
-                               config.getTopic(), config.getSubscription(), credentials, StorageLevel.MEMORY_ONLY(),
+        new PubSubInputDStream(streamingContext.getSparkStreamingContext().ssc(), config, StorageLevel.MEMORY_ONLY(),
                                autoAcknowledge);
       receivers.add(new JavaReceiverInputDStream<>(receiverInputDStream, tag));
     }
