@@ -46,7 +46,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import javax.annotation.Nullable;
 
 /**
  * Spark Receiver for Pub/Sub Messages.
@@ -125,8 +124,8 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
 
     //Configure properties
     this.project = config.getProject();
-    this.topic = config.getTopic();
-    this.subscription = config.getSubscription();
+    this.topic = TopicName.format(config.getProject(), config.getTopic());
+    this.subscription = ProjectSubscriptionName.format(config.getProject(), config.getSubscription());
 
     try {
       this.credentials = config.getServiceAccount() == null ?
@@ -143,8 +142,8 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     }
 
     //Schedule tasks to set the message rate (Token Bucket algorithm) and start the receiver worker.
-    this.executor.scheduleAtFixedRate(this::getAndUpdateMessageRate, 0, 1, TimeUnit.SECONDS);
-    this.executor.submit(this::receive);
+    this.executor.scheduleAtFixedRate(this::updateMessageRateAndFillBucket, 0, 1, TimeUnit.SECONDS);
+    this.executor.submit(this::scheduleFetch);
 
     LOG.info("Receiver started execution");
   }
@@ -175,7 +174,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   }
 
   /**
-   * Create a new subscription (if needed) for the specified topic.
+   * Create a new subscription (if needed) for the supplied topic.
    *
    * @throws IllegalArgumentException when the specified Topic does not exists
    * @throws RuntimeException         when the SubscriptionAdminClient cannot be created.
@@ -191,11 +190,9 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
 
       try (SubscriptionAdminClient subscriptionAdminClient = getSubscriptionAdminClient()) {
 
-        TopicName topicName = TopicName.of(project, topic);
-        ProjectSubscriptionName subscriptionName = ProjectSubscriptionName.of(project, subscription);
         int ackDeadline = 10; //10 seconds before resending the message.
         subscriptionAdminClient.createSubscription(
-          subscriptionName, topicName, PushConfig.getDefaultInstance(), ackDeadline);
+          subscription, topic, PushConfig.getDefaultInstance(), ackDeadline);
         return;
 
       } catch (ApiException ae) {
@@ -212,7 +209,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
         if (ae.getStatusCode().getCode().equals(StatusCode.Code.NOT_FOUND)) {
           String message = String.format(MISSING_TOPIC_ERROR_MSG, topic, project);
           stop(message, ae);
-          continue;
+          return;
         }
 
         //Retry if the exception is retriable.
@@ -223,15 +220,12 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
 
         //Report that we were not able to create the subscription and stop the receiver.
         stop(String.format(CREATE_SUBSCRIPTION_ERROR_MSG, subscription), ae);
+        return;
       } catch (IOException ioe) {
         //Report that we were not able to create the subscription admin client and stop the receiver.
         stop(String.format(CREATE_SUBSCRIPTION_ADMIN_CLIENT_ERROR_MSG, subscription), ioe);
+        return;
       }
-
-    }
-
-    if (isStopped()) {
-      return;
     }
 
     //If we were not able to create the subscription after 5 attempts, stop the pipeline and report the error.
@@ -239,19 +233,17 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   }
 
   /**
-   * Receive new messages and store based on the Storage Level settings.
+   * Build subscriber client and schedule fetch task to run at a 100 millisecond delay.
    *
    * @throws ApiException     when the Pub/Sub API throws a non-retryable exception.
    * @throws RuntimeException when the GrpcSubscriberStub cannot be created.
    */
-  public void receive() {
+  public void scheduleFetch() {
     try {
       SubscriberStubSettings subscriberSettings = getSubscriberSettings();
       subscriber = getSubscriber(subscriberSettings);
-      String subscriptionName = ProjectSubscriptionName.format(project, subscription);
 
-      executor.scheduleWithFixedDelay(
-        () -> fetchWithBackoff(subscriber, subscriptionName), 0, 100, TimeUnit.MILLISECONDS);
+      executor.scheduleWithFixedDelay(this::receiveMessages, 0, 100, TimeUnit.MILLISECONDS);
     } catch (IOException ioe) {
       //This exception is thrown when the subscriber could not be created.
       //Report the exception and stop the receiver.
@@ -264,19 +256,15 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   /**
    * Fetch new messages for our subscription.
    * Implements exponential backoff strategy when a retryable exception is received.
-   *
-   * @param subscriber       The subscriber stub.
-   * @param subscriptionName The name of the subscription to use to pull data.
-   * @throws ApiException when the Pub/Sub API throws a non-retryable exception.
+   * This method stops the receiver if a non retryable ApiException is thrown by the Google Cloud subscriber client.
    */
-  protected void fetchWithBackoff(SubscriberStub subscriber, String subscriptionName) {
+  protected void receiveMessages() {
     int backoff = backoffConfig.getInitialBackoffMs();
 
     //Try with backoff until stopped or the task succeeds.
     while (!isStopped()) {
       try {
-        fetchAndStoreMessages(subscriber, subscriptionName);
-        backoff = backoffConfig.getInitialBackoffMs();
+        fetchAndAck();
         return;
       } catch (ApiException ae) {
         if (ae.isRetryable()) {
@@ -286,6 +274,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
           String message =
             String.format(FETCH_ERROR_MSG, subscription, project);
           restart(message, ae);
+          break;
         }
       }
     }
@@ -294,12 +283,8 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   /**
    * Fetch new messages, store in Spark's memory, and ack messages.
    * Based on SubscribeSyncExample.java in Google's PubSub examples.
-   *
-   * @param subscriber       The subscriber stub.
-   * @param subscriptionName The name of the subscription to use to pull data.
-   * @throws ApiException when the Pull request or ACK request fail.
    */
-  protected void fetchAndStoreMessages(SubscriberStub subscriber, String subscriptionName) {
+  protected void fetchAndAck() {
     //Get the maximun number of messages to get. If this number is less or equal than 0, do not fetch.
     int maxMessages = bucket.get();
     if (maxMessages <= 0) {
@@ -309,7 +294,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     PullRequest pullRequest =
       PullRequest.newBuilder()
         .setMaxMessages(maxMessages)
-        .setSubscription(subscriptionName)
+        .setSubscription(subscription)
         .build();
     PullResponse pullResponse = subscriber.pullCallable().call(pullRequest);
 
@@ -340,7 +325,7 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
       // Acknowledge received messages.
       AcknowledgeRequest acknowledgeRequest =
         AcknowledgeRequest.newBuilder()
-          .setSubscription(subscriptionName)
+          .setSubscription(subscription)
           .addAllAckIds(ackIds)
           .build();
       subscriber.acknowledgeCallable().call(acknowledgeRequest);
@@ -413,13 +398,10 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
   }
 
   /**
-   * Get the rate at which this receiver should pull messages.
-   * <p>
+   * Get the rate at which this receiver should pull messages and set this rate in the bucket we use for rate control.
    * The default rate is Integer.MAX_VALUE if the receiver has not been able to calculate a rate.
-   *
-   * @return The current rate at which this receiver should fetch messages.
    */
-  protected int getAndUpdateMessageRate() {
+  protected void updateMessageRateAndFillBucket() {
     int messageRate = (int) Math.min(supervisor().getCurrentRateLimit(), Integer.MAX_VALUE);
 
     if (messageRate != previousFetchRate) {
@@ -428,8 +410,6 @@ public class PubSubReceiver extends Receiver<PubSubMessage> {
     }
 
     bucket.set(messageRate);
-
-    return messageRate;
   }
 
   /**

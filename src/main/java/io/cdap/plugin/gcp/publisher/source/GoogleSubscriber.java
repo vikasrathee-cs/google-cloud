@@ -58,7 +58,7 @@ public class GoogleSubscriber extends PubSubSubscriber<StructuredRecord> {
       }
     };
 
-  protected static ZonedDateTime getTimestamp(Instant instant) {
+  private static ZonedDateTime getTimestamp(Instant instant) {
     return ZonedDateTime.ofInstant(instant, ZoneId.ofOffset("UTC", ZoneOffset.UTC));
   }
 

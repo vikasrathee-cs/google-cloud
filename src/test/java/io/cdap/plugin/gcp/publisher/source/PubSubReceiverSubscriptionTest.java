@@ -5,10 +5,8 @@ import com.google.api.gax.rpc.StatusCode;
 import com.google.auth.Credentials;
 import com.google.cloud.pubsub.v1.SubscriptionAdminClient;
 import com.google.cloud.pubsub.v1.stub.SubscriberStub;
-import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.PushConfig;
 import com.google.pubsub.v1.Subscription;
-import com.google.pubsub.v1.TopicName;
 import org.apache.spark.api.java.StorageLevels;
 import org.apache.spark.storage.StorageLevel;
 import org.junit.Before;
@@ -27,7 +25,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doCallRealMethod;
@@ -44,18 +41,24 @@ public class PubSubReceiverSubscriptionTest {
 
   //Global properties used for testing.
   Credentials credentials = null;
-  boolean autoAcknowledge = false;
+  boolean autoAcknowledge = true;
   StorageLevel level = StorageLevels.MEMORY_ONLY;
   AtomicInteger bucket = new AtomicInteger();
   AtomicBoolean isStopped = new AtomicBoolean(false);
 
-  //Mocked properties
-  @Mock StatusCode statusCode;
-  @Mock ApiException apiException;
-  @Mock SubscriptionAdminClient subscriptionAdminClient;
-  @Mock PubSubReceiver.BackoffConfig backoffConfig;
-  @Mock ScheduledThreadPoolExecutor executor;
-  @Mock SubscriberStub subscriber;
+  //Mocks used to configure tests
+  @Mock
+  StatusCode statusCode;
+  @Mock
+  ApiException apiException;
+  @Mock
+  SubscriptionAdminClient subscriptionAdminClient;
+  @Mock
+  PubSubReceiver.BackoffConfig backoffConfig;
+  @Mock
+  ScheduledThreadPoolExecutor executor;
+  @Mock
+  SubscriberStub subscriber;
 
   PubSubReceiver receiver;
 
@@ -66,6 +69,7 @@ public class PubSubReceiverSubscriptionTest {
     receiver = spy(receiver);
 
     //Set up invocations to the stop method.
+    isStopped.set(false);
     doAnswer(new Answer() {
       @Override
       public Object answer(InvocationOnMock invocationOnMock) throws Throwable {
@@ -94,8 +98,8 @@ public class PubSubReceiverSubscriptionTest {
     receiver.createSubscription();
 
     verify(subscriptionAdminClient, times(1))
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           eq(10));
   }
@@ -109,16 +113,16 @@ public class PubSubReceiverSubscriptionTest {
 
     doThrow(apiException)
       .when(subscriptionAdminClient)
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           anyInt());
 
     receiver.createSubscription();
 
     verify(subscriptionAdminClient, times(1))
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           eq(10));
     verify(apiException, times(1))
@@ -146,12 +150,12 @@ public class PubSubReceiverSubscriptionTest {
 
         return null;
       }
-    }).when(receiver).fetchAndStoreMessages(any(), anyString());
+    }).when(receiver).fetchAndAck();
 
     doThrow(apiException)
       .when(subscriptionAdminClient)
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           anyInt());
 
@@ -170,8 +174,8 @@ public class PubSubReceiverSubscriptionTest {
 
     doThrow(apiException)
       .when(subscriptionAdminClient)
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           anyInt());
 
@@ -197,8 +201,8 @@ public class PubSubReceiverSubscriptionTest {
     when(apiException.isRetryable()).thenReturn(true);
     when(statusCode.getCode()).thenReturn(StatusCode.Code.ABORTED);
 
-    when(subscriptionAdminClient.createSubscription(any(ProjectSubscriptionName.class),
-                                                    any(TopicName.class),
+    when(subscriptionAdminClient.createSubscription(any(String.class),
+                                                    any(String.class),
                                                     any(PushConfig.class),
                                                     anyInt()))
       .thenThrow(apiException)
@@ -208,8 +212,8 @@ public class PubSubReceiverSubscriptionTest {
     receiver.createSubscription();
 
     verify(subscriptionAdminClient, times(3))
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           eq(10));
     verify(apiException, times(4)) // 2 checks on each loop
@@ -224,8 +228,8 @@ public class PubSubReceiverSubscriptionTest {
     when(apiException.isRetryable()).thenReturn(true);
     when(statusCode.getCode()).thenReturn(StatusCode.Code.ABORTED);
 
-    when(subscriptionAdminClient.createSubscription(any(ProjectSubscriptionName.class),
-                                                    any(TopicName.class),
+    when(subscriptionAdminClient.createSubscription(any(String.class),
+                                                    any(String.class),
                                                     any(PushConfig.class),
                                                     anyInt()))
       .thenThrow(apiException);
@@ -233,8 +237,8 @@ public class PubSubReceiverSubscriptionTest {
     receiver.createSubscription();
 
     verify(subscriptionAdminClient, times(5))
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           eq(10));
 
@@ -248,8 +252,8 @@ public class PubSubReceiverSubscriptionTest {
     receiver.createSubscription();
 
     verify(subscriptionAdminClient, times(0))
-      .createSubscription(any(ProjectSubscriptionName.class),
-                          any(TopicName.class),
+      .createSubscription(any(String.class),
+                          any(String.class),
                           any(PushConfig.class),
                           eq(10));
   }
