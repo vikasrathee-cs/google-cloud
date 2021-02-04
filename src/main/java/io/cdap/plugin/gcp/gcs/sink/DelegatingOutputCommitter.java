@@ -16,19 +16,30 @@
 
 package io.cdap.plugin.gcp.gcs.sink;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
+import org.apache.hadoop.mapreduce.OutputFormat;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
+import static io.cdap.plugin.gcp.gcs.sink.DelegatingOutputFormat.DelegatingRecordWriter.buildOutputPath;
+import static io.cdap.plugin.gcp.gcs.sink.DelegatingOutputFormat.getDelegateFormat;
+
 /**
  * TODO: add
  */
 public class DelegatingOutputCommitter extends OutputCommitter {
+  private static final Logger LOG = LoggerFactory.getLogger(DelegatingOutputFormat.class);
+  private static final Gson GSON = new Gson();
 
   Map<String, OutputCommitter> committerMap;
 
@@ -40,11 +51,42 @@ public class DelegatingOutputCommitter extends OutputCommitter {
    * TODO: add
    */
   public void addCommitter(TaskAttemptContext context,
+                           String partitionName) throws IOException, InterruptedException {
+    //Set output directory
+    context.getConfiguration()
+      .set(FileOutputFormat.OUTDIR, buildOutputPath(context.getConfiguration(), partitionName));
+
+    //Create output format for the new output directory and add it to our delegating output committer
+    OutputFormat outputFormat = getDelegateFormat(context.getConfiguration());
+    GCSOutputCommitter gcsOutputCommitter = new GCSOutputCommitter(outputFormat.getOutputCommitter(context));
+    gcsOutputCommitter.setupJob(context);
+    gcsOutputCommitter.setupTask(context);
+    committerMap.put(partitionName, gcsOutputCommitter);
+  }
+
+  public void initCommitters(TaskAttemptContext context, String delegatePartitionNames) {
+    try {
+      Set<String> partitionNames = GSON.fromJson(delegatePartitionNames, new TypeToken<Set<String>>() {
+      }.getType());
+      for (String partition : partitionNames) {
+        if (!committerMap.containsKey(partition)) {
+          addCommitter(context, partition);
+        }
+      }
+    } catch (IOException | InterruptedException e) {
+      LOG.error("Exception when rebuilding committers.", e);
+      throw new RuntimeException(e);
+    }
+  }
+
+  public void addCommitter(TaskAttemptContext context,
                            String partitionName,
                            OutputCommitter committer) throws IOException {
-    committerMap.put(partitionName, committer);
-    committer.setupJob(context);
-    committer.setupTask(context);
+    committerMap.putIfAbsent(partitionName, committer);
+  }
+
+  public boolean hasCommitter(String partitionName) {
+    return committerMap.containsKey(partitionName);
   }
 
   @Override
@@ -61,6 +103,11 @@ public class DelegatingOutputCommitter extends OutputCommitter {
 
   @Override
   public boolean needsTaskCommit(TaskAttemptContext taskAttemptContext) throws IOException {
+    if (taskAttemptContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES) != null) {
+      initCommitters(taskAttemptContext,
+                     taskAttemptContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES));
+    }
+
     if (committerMap.isEmpty()) {
       return false;
     }
@@ -76,10 +123,25 @@ public class DelegatingOutputCommitter extends OutputCommitter {
 
   @Override
   public void commitTask(TaskAttemptContext taskAttemptContext) throws IOException {
+    LOG.warn("Commit task:" +
+               taskAttemptContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES));
+
+    if (taskAttemptContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES) != null) {
+      initCommitters(taskAttemptContext,
+                     taskAttemptContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES));
+    }
+
     for (OutputCommitter committer : committerMap.values()) {
-      if (committer.needsTaskCommit(taskAttemptContext)) {
-        committer.commitTask(taskAttemptContext);
-      }
+      committer.commitTask(taskAttemptContext);
+    }
+  }
+
+  @Override
+  public void commitJob(JobContext jobContext) throws IOException {
+    LOG.warn("Commit Job:" + jobContext.getConfiguration().get(DelegatingOutputFormat.DELEGATE_PARTITION_NAMES));
+
+    for (OutputCommitter committer : committerMap.values()) {
+      committer.commitJob(jobContext);
     }
   }
 

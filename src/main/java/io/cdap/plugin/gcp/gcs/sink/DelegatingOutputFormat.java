@@ -16,6 +16,8 @@
 
 package io.cdap.plugin.gcp.gcs.sink;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import io.cdap.cdap.api.data.format.StructuredRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.NullWritable;
@@ -30,7 +32,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 
 /**
@@ -38,10 +42,12 @@ import java.util.Map;
  */
 public class DelegatingOutputFormat extends OutputFormat<NullWritable, StructuredRecord> {
   private static final Logger LOG = LoggerFactory.getLogger(DelegatingOutputFormat.class);
-  public static final String PARTITION_FIELD = "delegating.partition.field";
-  private static final String DELEGATE_CLASS = "delegating.delegate";
-  private static final String OUTPUT_PATH_BASE_DIR = "delegating.output.path.base";
-  private static final String OUTPUT_PATH_SUFFIX = "delegating.output.path.suffix";
+  private static final Gson GSON = new Gson();
+  public static final String PARTITION_FIELD = "delegating_output_format.partition.field";
+  private static final String DELEGATE_CLASS = "delegating_output_format.delegate";
+  private static final String OUTPUT_PATH_BASE_DIR = "delegating_output_format.output.path.base";
+  private static final String OUTPUT_PATH_SUFFIX = "delegating_output_format.output.path.suffix";
+  public static final String DELEGATE_PARTITION_NAMES = "delegating_output_format.partition.names";
   private final Map<String, RecordWriter<NullWritable, StructuredRecord>> delegateMap;
   private final DelegatingOutputCommitter outputCommitter;
 
@@ -82,7 +88,7 @@ public class DelegatingOutputFormat extends OutputFormat<NullWritable, Structure
   }
 
   @SuppressWarnings("unchecked")
-  private static OutputFormat getDelegateFormat(Configuration hConf) throws IOException {
+  public static OutputFormat getDelegateFormat(Configuration hConf) throws IOException {
     String delegateClassName = hConf.get(DELEGATE_CLASS);
     try {
       Class<OutputFormat<NullWritable, StructuredRecord>> delegateClass =
@@ -119,17 +125,11 @@ public class DelegatingOutputFormat extends OutputFormat<NullWritable, Structure
       RecordWriter<NullWritable, StructuredRecord> delegate =
         delegateMap.computeIfAbsent(val, (partitionName) -> {
           try {
-            //Set output directory
-            context.getConfiguration()
-              .set(FileOutputFormat.OUTDIR, buildOutputPath(context.getConfiguration(), partitionName));
 
-            //Create output format for the new output directory and add it to our delegating output committer
-            OutputFormat outputFormat = getDelegateFormat(context.getConfiguration());
-            OutputCommitter gcsOutputCommitter = new GCSOutputCommitter(outputFormat.getOutputCommitter(context));
-            delegatingOutputCommitter.addCommitter(context, partitionName, gcsOutputCommitter);
+            delegatingOutputCommitter.addCommitter(context, partitionName);
 
             //Add record writer to delegate map.
-            return outputFormat.getRecordWriter(context);
+            return getDelegateFormat(context.getConfiguration()).getRecordWriter(context);
           } catch (IOException | InterruptedException e) {
             LOG.error("Unable to instantiate delegate class.", e);
             throw new RuntimeException(e);
@@ -145,9 +145,11 @@ public class DelegatingOutputFormat extends OutputFormat<NullWritable, Structure
       for (RecordWriter<NullWritable, StructuredRecord> delegate : delegateMap.values()) {
         delegate.close(context);
       }
+
+      context.getConfiguration().set(DELEGATE_PARTITION_NAMES, GSON.toJson(delegateMap.keySet()));
     }
 
-    private String buildOutputPath(Configuration hConf, String context) {
+    public static String buildOutputPath(Configuration hConf, String context) {
       return String.format("%s/%s/%s", hConf.get(OUTPUT_PATH_BASE_DIR), context, hConf.get(OUTPUT_PATH_SUFFIX));
     }
   }
