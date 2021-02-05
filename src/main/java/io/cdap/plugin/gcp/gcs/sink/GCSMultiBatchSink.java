@@ -79,8 +79,11 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
     PluginProperties.Builder formatPropertiesBuilder = PluginProperties.builder()
       .addAll(config.getProperties().getProperties());
 
-    if (!config.getAllowFlexibleSchema()) {
+    if (config.getAllowFlexibleSchema()) {
+      formatPropertiesBuilder.add("allowFlexibleSchema", "true");
+    } else {
       formatPropertiesBuilder.add("schema", String.format("${%s}", SCHEMA_MACRO));
+      formatPropertiesBuilder.add("allowFlexibleSchema", "false");
     }
 
     PluginProperties formatProperties = formatPropertiesBuilder.build();
@@ -174,8 +177,6 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
                                             Map<String, String> baseProperties,
                                             Map<String, String> argumentCopy) throws InstantiationException {
     ValidatingOutputFormat validatingOutputFormat = context.newPluginInstance(FORMAT_PLUGIN_ID);
-
-    context.getArguments().set(SCHEMA_MACRO, "");
 
     Map<String, String> outputProperties = new HashMap<>(baseProperties);
     outputProperties.putAll(validatingOutputFormat.getOutputFormatConfiguration());
