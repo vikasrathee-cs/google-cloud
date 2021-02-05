@@ -39,7 +39,7 @@ public class DelegatingGCSOutputCommitter extends OutputCommitter {
   }
 
   /**
-   * Add a new GCSOutputCommitter based on a supplied Input Format and Table Name.
+   * Add a new GCSOutputCommitter based on a supplied Output Format and Table Name.
    *
    * This GCS Output Committer gets initialized when created.
    */
@@ -101,8 +101,18 @@ public class DelegatingGCSOutputCommitter extends OutputCommitter {
 
   @Override
   public void abortTask(TaskAttemptContext taskAttemptContext) throws IOException {
+    IOException ioe = new IOException("Exception when aborting task.");
+
     for (OutputCommitter committer : committerMap.values()) {
-      committer.abortTask(taskAttemptContext);
+      try {
+        committer.abortTask(taskAttemptContext);
+      } catch (IOException e) {
+        ioe.addSuppressed(e);
+      }
+    }
+
+    if (ioe.getSuppressed().length > 0) {
+      throw ioe;
     }
   }
 }
