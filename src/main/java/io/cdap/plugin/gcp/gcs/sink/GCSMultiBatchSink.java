@@ -76,9 +76,14 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
 
     FileFormat format = config.getFormat();
     // add schema as a macro since we don't know it until runtime
-    PluginProperties formatProperties = PluginProperties.builder()
-      .addAll(config.getProperties().getProperties())
-      .add("schema", String.format("${%s}", SCHEMA_MACRO)).build();
+    PluginProperties.Builder formatPropertiesBuilder = PluginProperties.builder()
+      .addAll(config.getProperties().getProperties());
+
+    if (!config.getAllowFlexibleSchema()) {
+      formatPropertiesBuilder.add("schema", String.format("${%s}", SCHEMA_MACRO));
+    }
+
+    PluginProperties formatProperties = formatPropertiesBuilder.build();
 
     OutputFormatProvider outputFormatProvider =
       pipelineConfigurer.usePlugin(ValidatingOutputFormat.PLUGIN_TYPE, format.name().toLowerCase(),
