@@ -170,6 +170,8 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
                                             Map<String, String> argumentCopy) throws InstantiationException {
     ValidatingOutputFormat validatingOutputFormat = context.newPluginInstance(FORMAT_PLUGIN_ID);
 
+    context.getArguments().set(SCHEMA_MACRO, "");
+
     Map<String, String> outputProperties = new HashMap<>(baseProperties);
     outputProperties.putAll(validatingOutputFormat.getOutputFormatConfiguration());
     outputProperties.putAll(DelegatingGCSOutputFormat.configure(validatingOutputFormat.getOutputFormatClassName(),
