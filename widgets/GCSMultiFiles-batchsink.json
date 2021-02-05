@@ -63,24 +63,7 @@
           "widget-attributes": {
             "placeholder": "Delimiter if the format is 'delimited'"
           }
-        },
-        {
-          "widget-type": "toggle",
-          "label" : "Allow Flexible Schemas",
-          "name" : "allowFlexibleSchemas",
-          "widget-attributes": {
-            "on": {
-              "value": "false",
-              "label": "Yes"
-            },
-            "off": {
-              "value": "true",
-              "label": "No"
-            },
-            "default": "false"
-          }
         }
-
       ]
     },
     {
@@ -143,6 +126,22 @@
           "name": "splitField",
           "widget-attributes": {
             "default": "tablename"
+          }
+        },
+        {
+          "widget-type": "toggle",
+          "label" : "Allow flexible schemas in Output",
+          "name" : "allowFlexibleSchema",
+          "widget-attributes": {
+            "on": {
+              "value": "true",
+              "label": "Yes"
+            },
+            "off": {
+              "value": "false",
+              "label": "No"
+            },
+            "default": "off"
           }
         },
         {
