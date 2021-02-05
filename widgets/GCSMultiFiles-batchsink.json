@@ -63,7 +63,24 @@
           "widget-attributes": {
             "placeholder": "Delimiter if the format is 'delimited'"
           }
+        },
+        {
+          "widget-type": "toggle",
+          "label" : "Allow Flexible Schemas",
+          "name" : "allowFlexibleSchemas",
+          "widget-attributes": {
+            "on": {
+              "value": "false",
+              "label": "Yes"
+            },
+            "off": {
+              "value": "true",
+              "label": "No"
+            },
+            "default": "false"
+          }
         }
+
       ]
     },
     {

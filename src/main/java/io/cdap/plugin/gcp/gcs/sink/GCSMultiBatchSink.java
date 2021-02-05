@@ -21,6 +21,7 @@ import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageException;
 import com.google.common.base.Strings;
 import io.cdap.cdap.api.annotation.Description;
+import io.cdap.cdap.api.annotation.Macro;
 import io.cdap.cdap.api.annotation.Name;
 import io.cdap.cdap.api.annotation.Plugin;
 import io.cdap.cdap.api.data.batch.Output;
@@ -120,8 +121,13 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
           + "Ensure you entered the correct bucket path and have permissions for it.", e);
     }
 
-    //TODO: add logic to pick which one to use.
-    configureSchemalessMultiSink(context, baseProperties, argumentCopy);
+    if (config.getAllowFlexibleSchema()) {
+      //Configure MultiSink with support for flexible schemas.
+      configureSchemalessMultiSink(context, baseProperties, argumentCopy);
+    } else {
+      //Configure MultiSink with fixed schemas based on arguments.
+      configureMultiSinkWithSchema(context, baseProperties, argumentCopy);
+    }
   }
 
   @Override
@@ -166,20 +172,21 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
 
     Map<String, String> outputProperties = new HashMap<>(baseProperties);
     outputProperties.putAll(validatingOutputFormat.getOutputFormatConfiguration());
-    outputProperties.putAll(DelegatingOutputFormat.configure(validatingOutputFormat.getOutputFormatClassName(),
-                                                             config.splitField,
-                                                             config.getOutputBaseDir(),
-                                                             config.getOutputSuffix(context.getLogicalStartTime())));
+    outputProperties.putAll(DelegatingGCSOutputFormat.configure(validatingOutputFormat.getOutputFormatClassName(),
+                                                                config.splitField,
+                                                                config.getOutputBaseDir(),
+                                                                config.getOutputSuffix(context.getLogicalStartTime())));
     outputProperties.put(GCSBatchSink.CONTENT_TYPE, config.getContentType());
     context.addOutput(Output.of(
       config.getReferenceName(),
-      new SinkOutputFormatProvider(DelegatingOutputFormat.class.getName(), outputProperties)));
+      new SinkOutputFormatProvider(DelegatingGCSOutputFormat.class.getName(), outputProperties)));
   }
 
   /**
    * Sink configuration.
    */
   public static class GCSMultiBatchSinkConfig extends GCSBatchSink.GCSBatchSinkConfig {
+    private static final String NAME_ALLOW_FLEXIBLE_SCHEMA = "allowFlexibleSchema";
 
     @Description("The codec to use when writing data. " +
       "The 'avro' format supports 'snappy' and 'deflate'. The parquet format supports 'snappy' and 'gzip'. " +
@@ -189,6 +196,13 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
 
     @Description("The name of the field that will be used to determine which directory to write to.")
     private String splitField = "tablename";
+
+    @Name(NAME_ALLOW_FLEXIBLE_SCHEMA)
+    @Macro
+    @Nullable
+    @Description("Allow Flexible Schemas in output. If disabled, only records with schemas set as " +
+      "arguments will be processed. If enabled, all records will be written as-is.")
+    private Boolean allowFlexibleSchema;
 
     protected String getOutputDir(long logicalStartTime, String context) {
       return String.format("%s/%s/%s", getOutputBaseDir(), context, getOutputSuffix(logicalStartTime));
@@ -203,8 +217,8 @@ public class GCSMultiBatchSink extends BatchSink<StructuredRecord, NullWritable,
       return suffixOk ? new SimpleDateFormat(getSuffix()).format(logicalStartTime) : "";
     }
 
-    protected String getOutputTempDir() {
-      return String.format("%s/temp/%s", getOutputBaseDir(), UUID.randomUUID());
+    public Boolean getAllowFlexibleSchema() {
+      return allowFlexibleSchema != null ? allowFlexibleSchema : false;
     }
   }
 }
