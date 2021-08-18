@@ -1,43 +1,34 @@
-import argparse
+import io
 import json
 import os
 import requests
 import subprocess
 import xml.etree.ElementTree as ET
+import zipfile
 
 def run_shell_command(cmd):
     process = subprocess.run(cmd.split(" "))
     assert process.returncode == 0
 
-def checkout_repo(repo, branch):
-    run_shell_command(f'git clone http://github.com/{repo}')
-    os.chdir(repo.split('/')[-1])
-    run_shell_command(f'git checkout {branch}')
-    os.chdir("..")
-
-
-# Get plugin repo and branch from command line
-parser = argparse.ArgumentParser(description='Run CDAP end-to-end tests.')
-parser.add_argument('plugin_repo', metavar='REPO', type=str, action='store',
-                   help='Github repository where the plugin lives. ex: data-integrations/google-cloud')
-parser.add_argument('plugin_branch', metavar='BRANCH', type=str, action='store',
-                   help='Github branch name. ex: develop')
-args = parser.parse_args()
-
-
 # Start CDAP sandbox
-print("Pulling sandbox docker image")
-run_shell_command("docker pull caskdata/cdap-sandbox:latest")
-print("Running sandbox")
-run_shell_command("docker run --name cdap-sandbox -p 11011:11011 -p 11015:11015 -d caskdata/cdap-sandbox")
+print("Downloading CDAP sandbox")
+sandbox_url = "https://builds.cask.co/artifact/CDAP-BUT/shared/build-latestSuccessful/SDK/cdap/cdap-standalone/target/cdap-sandbox-6.6.0-SNAPSHOT.zip"
+sandbox_dir = sandbox_url.split("/")[-1].split(".zip")[0]
+r = requests.get(sandbox_url)
+z = zipfile.ZipFile(io.BytesIO(r.content))
+z.extractall("./sandbox")
+os.chdir(f"sandbox/{sandbox_dir}/bin")
+print("Start the sandbox")
+run_shell_command("chmod +x cdap")
+run_shell_command("./cdap sandbox start")
+os.chdir("../..")
 
-# Checkout the plugin repo
-print("Checking out plugin repo")
-checkout_repo(args.plugin_repo, args.plugin_branch)
+plugin_dir = "plugin"
+e2e_test_dir = "e2e"
 
 # Build the plugin
-print("Building plugin repo")
-os.chdir(args.plugin_repo.split('/')[-1])
+print("Building plugin")
+os.chdir(plugin_dir)
 run_shell_command("mvn clean package -DskipTests")
 
 # Get plugin artifact name and version from pom.xml.
@@ -66,12 +57,7 @@ res=requests.put(f"http://localhost:11015/v3/namespaces/default/artifacts/{plugi
 assert res.ok or print(res.texts)
 
 os.chdir("../..")
-
-# Checkout e2e test repo
-print("Checking out cdap-e2e-tests")
-checkout_repo('cdapio/cdap-e2e-tests', 'develop')
-
 # Run e2e tests
 print("Running e2e tests")
-os.chdir('cdap-e2e-tests')
+os.chdir(e2e_test_dir)
 run_shell_command("mvn clean test")
