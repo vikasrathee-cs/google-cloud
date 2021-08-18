@@ -24,7 +24,7 @@ on:
 
 jobs:
   build:
-    runs-on: k8s-runner-build
+    runs-on: k8s-runner-e2e
 
     steps:
       # Pinned 1.0.0 version
@@ -44,4 +44,4 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-${{ github.workflow }}
       - name: Run tests
-        run: python plugin/scripts/run_e2e_test.py data-integrations/google-cloud release/0.17
+        run: python3 plugin/scripts/run_e2e_test.py data-integrations/google-cloud release/0.17
