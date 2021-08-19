@@ -21,10 +21,11 @@ print("Start the sandbox")
 run_shell_command(f"chmod +x sandbox/{sandbox_dir}/bin/cdap")
 run_shell_command(f"sandbox/{sandbox_dir}/bin/cdap sandbox start")
 
-print(os.getcwd())
-print(os.listdir())
+print("cwd:", os.getcwd())
+print("dir:", os.listdir())
 
 # Build the plugin
+os.chdir("plugin")
 print("Building plugin")
 run_shell_command("mvn clean package -DskipTests")
 
