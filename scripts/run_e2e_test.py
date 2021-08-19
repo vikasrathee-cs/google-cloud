@@ -17,18 +17,15 @@ sandbox_dir = sandbox_url.split("/")[-1].split(".zip")[0]
 r = requests.get(sandbox_url)
 z = zipfile.ZipFile(io.BytesIO(r.content))
 z.extractall("./sandbox")
-os.chdir(f"sandbox/{sandbox_dir}/bin")
 print("Start the sandbox")
-run_shell_command("chmod +x cdap")
-run_shell_command("./cdap sandbox start")
-os.chdir("../..")
+run_shell_command(f"chmod +x sandbox/{sandbox_dir}/bin/cdap")
+run_shell_command(f"sandbox/{sandbox_dir}/bin/cdap sandbox start")
 
-plugin_dir = "plugin"
-e2e_test_dir = "e2e"
+print(os.getcwd())
+print(os.listdir())
 
 # Build the plugin
 print("Building plugin")
-os.chdir(plugin_dir)
 run_shell_command("mvn clean package -DskipTests")
 
 # Get plugin artifact name and version from pom.xml.
@@ -56,8 +53,8 @@ assert res.ok or print(res.text)
 res=requests.put(f"http://localhost:11015/v3/namespaces/default/artifacts/{plugin_name}/versions/{plugin_version}/properties", json=plugin_properties)
 assert res.ok or print(res.texts)
 
-os.chdir("../..")
+os.chdir("../")
 # Run e2e tests
 print("Running e2e tests")
-os.chdir(e2e_test_dir)
+os.chdir("e2e")
 run_shell_command("mvn clean test")
