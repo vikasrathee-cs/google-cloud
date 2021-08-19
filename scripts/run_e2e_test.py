@@ -21,9 +21,6 @@ print("Start the sandbox")
 run_shell_command(f"chmod +x sandbox/{sandbox_dir}/bin/cdap")
 run_shell_command(f"sandbox/{sandbox_dir}/bin/cdap sandbox start")
 
-print("cwd:", os.getcwd())
-print("dir:", os.listdir())
-
 # Build the plugin
 os.chdir("plugin")
 print("Building plugin")
@@ -54,7 +51,10 @@ assert res.ok or print(res.text)
 res=requests.put(f"http://localhost:11015/v3/namespaces/default/artifacts/{plugin_name}/versions/{plugin_version}/properties", json=plugin_properties)
 assert res.ok or print(res.texts)
 
-os.chdir("../")
+os.chdir("../..")
+print("cwd:", os.getcwd())
+print("ls:", os.listdir())
+
 # Run e2e tests
 print("Running e2e tests")
 os.chdir("e2e")
