@@ -631,7 +631,7 @@ public class DataplexBatchSinkConfigTest {
     assertEquals("assetType", config.getAssetType());
     assertEquals("zone", config.getZone());
     assertEquals("suffix", config.getSuffix());
-    assertEquals("referenceName", config.getReferenceName());
+    assertEquals("referenceName", config.getReferenceName("referenceName"));
     assertEquals("INSERT", config.getOperation().toString());
     assertEquals("dedupeby", config.getDedupeBy());
     assertEquals("key", config.getTableKey());
